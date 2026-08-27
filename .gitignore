@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+/build/
+/dist/
+*.log
+
+# Environment files — NEVER commit secrets
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+service-account*.json
+
+# Flutter
+hawler_monopoly/.dart_tool/
+hawler_monopoly/.flutter-plugins-dependencies
+hawler_monopoly/pubspec.lock
+hawler_monopoly/build/
+hawler_monopoly/.idea/
+hawler_monopoly/*.iml
+hawler_monopoly/.metadata
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.pyc
+
+# Firebase config (auto-generated, may contain API keys)
+**/firebase_options.dart
+**/google-services.json
+**/GoogleService-Info.plist
+**/firebase_app_id_file.json
+
+# Railway
+.railway/
+
+# Freebuff internal
+.freebuff/
