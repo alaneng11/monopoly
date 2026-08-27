@@ -150,6 +150,14 @@ const PORT = process.env.PORT || 3000;
   try {
     await initDb();
     console.log('✅ Database initialized');
+    
+    // Auto-run migrations and seed on startup
+    try {
+      const { autoSetup } = require('./auto_setup');
+      await autoSetup();
+    } catch (e) {
+      console.log('⚠️ Auto-setup skipped:', e.message);
+    }
   } catch (err) {
     console.error('❌ Database failed:', err.message);
     process.exit(1);
