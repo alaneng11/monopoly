@@ -75,8 +75,12 @@ router.post('/:code/start', authMiddleware, async (req, res) => {
     if (!room) return res.status(404).json({ error: 'ژوورەکە نەدۆزرایەوە.' });
     if (room.host_id !== req.userId) return res.status(403).json({ error: 'تەنها میوان.' });
 
-    const players = await query('SELECT * FROM game_room_players WHERE room_code = $1', [code]);
+    const players = await query('SELECT * FROM game_room_players WHERE room_code = $1 ORDER BY joined_at ASC', [code]);
     if (players.length < 2) return res.status(400).json({ error: 'لانی کەم ٢ یاریزان.' });
+
+    // Find host's index so they go first
+    const hostIdx = players.findIndex(p => p.user_id === req.userId);
+    const currentPlayerIndex = hostIdx >= 0 ? hostIdx : 0;
 
     const seed = Math.floor(Math.random() * 2147483647);
     const gameState = players.map((p, i) => ({
@@ -86,8 +90,8 @@ router.post('/:code/start', authMiddleware, async (req, res) => {
     }));
 
     await run(
-      'INSERT INTO game_states (room_code, players, dice, phase, seed, dice_energy, max_dice_energy) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [code, JSON.stringify(gameState), JSON.stringify([1, 1]), 'awaitingRoll', seed, 10, 10]
+      'INSERT INTO game_states (room_code, current_player_index, players, dice, phase, seed, dice_energy, max_dice_energy) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [code, currentPlayerIndex, JSON.stringify(gameState), JSON.stringify([1, 1]), 'awaitingRoll', seed, 10, 10]
     );
 
     await run('UPDATE game_rooms SET status = $1, started_at = $2, version = version + 1, updated_at = $3 WHERE code = $4',
