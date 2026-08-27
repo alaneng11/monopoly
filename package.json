@@ -1,0 +1,14 @@
+{
+  "name": "hawler-monopoly",
+  "version": "1.0.0",
+  "private": true,
+  "description": "مۆنۆپۆلی هەولێر — Server backend",
+  "main": "backend/src/index.js",
+  "scripts": {
+    "start": "node backend/src/index.js",
+    "postinstall": "cd backend && npm install"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
