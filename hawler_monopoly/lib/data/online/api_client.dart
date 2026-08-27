@@ -21,7 +21,7 @@ class ApiClient {
     _baseUrl = baseUrl;
   }
 
-  String get baseUrl => _baseUrl ?? 'http://localhost:3000';
+  String get baseUrl => _baseUrl ?? 'https://backend-production-bdeaa.up.railway.app';
   String? get token => _token;
   bool get isAuthenticated => _token != null;
 
