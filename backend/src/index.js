@@ -155,13 +155,6 @@ const PORT = process.env.PORT || 3000;
     process.exit(1);
   }
 
-  // Run migrations
-  try {
-    require('./migrate');
-  } catch (e) {
-    console.log('Migration skipped (will run via separate command)');
-  }
-
   server.listen(PORT, () => {
     console.log(`🏰 مۆنۆپۆلی هەولێر backend v2.0 on port ${PORT}`);
     console.log(`   Health: http://localhost:${PORT}/health`);

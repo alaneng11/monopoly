@@ -7,7 +7,6 @@
 
 const { query, queryOne, run, transaction } = require('../models/database');
 const { generateId, validateDice } = require('../utils/validation');
-const { broadcastToRoom } = require('../index');
 
 // ── Board Definition (40 tiles) ─────────────────────────────
 

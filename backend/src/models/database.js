@@ -29,7 +29,7 @@ async function initDb() {
   } else {
     const initSqlJs = require('sql.js');
     const SQL = await initSqlJs();
-    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'data.db');
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     if (fs.existsSync(dbPath)) {
@@ -131,7 +131,7 @@ if (!USE_PG) {
     if (sqlJsDb) {
       try {
         const data = sqlJsDb.export();
-        const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data.db');
+        const dbPath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'data.db');
         fs.writeFileSync(dbPath, Buffer.from(data));
       } catch (_) {}
     }
@@ -141,7 +141,7 @@ if (!USE_PG) {
 function saveSqlite() {
   if (!USE_PG && sqlJsDb) {
     const data = sqlJsDb.export();
-    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'data.db');
     fs.writeFileSync(dbPath, Buffer.from(data));
   }
 }

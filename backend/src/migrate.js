@@ -408,10 +408,11 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_session_user ON user_sessions(user_id);
 `;
 
-// SQLite-specific: remove FROM epoch() defaults and use unixepoch()
+// SQLite-specific: adapt PostgreSQL syntax
 const UP_SQLITE = UP
-  .replace(/DEFAULT \(extract\(epoch from now\(\)\)::bigint\)/g, "DEFAULT (unixepoch())")
-  .replace(/DEFAULT \(extract\(epoch from now\(\)\)::bigint\)/g, "DEFAULT (unixepoch())");
+  .replace(/DEFAULT \(extract\(epoch from now\(\)\)::bigint\)/g, 'DEFAULT (unixepoch())')
+  .replace(/JSONB/g, 'TEXT')
+  .replace(/REAL/g, 'REAL');
 
 async function migrate() {
   await initDb();
@@ -435,6 +436,9 @@ async function migrate() {
   
   console.log(`✅ Migration complete: ${count} statements executed`);
   console.log(`   Database: ${USE_PG ? 'PostgreSQL' : 'SQLite'}`);
+  // Explicitly save SQLite to disk before exit
+  const { saveSqlite } = require('./models/database');
+  saveSqlite();
   process.exit(0);
 }
 
