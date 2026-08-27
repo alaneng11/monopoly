@@ -18,4 +18,5 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV DB_PATH=/app/data/hawler.db
 
-CMD ["sh", "-c", "node src/migrate.js && node src/seed.js && node src/index.js"]
+# Run migrations, seed, then start server
+CMD ["sh", "-c", "node src/migrate.js; node src/seed.js; node src/index.js"]
