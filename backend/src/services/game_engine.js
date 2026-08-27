@@ -20,6 +20,17 @@ function randomDice() {
   return [Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1];
 }
 
+/** Parse SQLite TEXT fields that are actually JSON */
+function parseState(gs) {
+  if (!gs) return gs;
+  if (typeof gs.players === 'string') gs.players = JSON.parse(gs.players);
+  if (typeof gs.dice === 'string') gs.dice = JSON.parse(gs.dice);
+  if (typeof gs.active_event === 'string' && gs.active_event) gs.active_event = JSON.parse(gs.active_event);
+  if (typeof gs.pending_trade === 'string' && gs.pending_trade) gs.pending_trade = JSON.parse(gs.pending_trade);
+  if (typeof gs.auction === 'string' && gs.auction) gs.auction = JSON.parse(gs.auction);
+  return gs;
+}
+
 function advancePlayer(players, fromIndex) {
   let next = (fromIndex + 1) % players.length;
   let guard = 0;
@@ -39,7 +50,7 @@ function computeRent(tile, level, eventMult = 1.0) {
 
 async function rollDice(roomCode, userId) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
 
     const players = gs.players;
@@ -96,7 +107,7 @@ async function rollDice(roomCode, userId) {
 
 async function movePlayer(roomCode, userId) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
 
     if (gs.phase !== 'rolling' && gs.phase !== 'moving') throw { code: 'BAD_PHASE', message: 'دۆخی جوڵان چالاک نییە.' };
@@ -149,7 +160,7 @@ async function movePlayer(roomCode, userId) {
 
 async function buyProperty(roomCode, userId) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
     if (gs.phase !== 'propertyDecision') throw { code: 'BAD_PHASE', message: 'دۆخی بڕیار چالاک نییە.' };
 
@@ -205,7 +216,7 @@ async function buyProperty(roomCode, userId) {
 
 async function upgradeProperty(roomCode, userId, tileIndex) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
 
     const prop = await db.queryOne('SELECT * FROM properties WHERE room_code = $1 AND tile_index = $2', [roomCode, tileIndex]);
@@ -250,7 +261,7 @@ async function upgradeProperty(roomCode, userId, tileIndex) {
 
 async function endTurn(roomCode, userId) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
     if (gs.phase !== 'endTurn') throw { code: 'BAD_PHASE', message: 'دۆخی کۆتایی سووڕ چالاک نییە.' };
 
@@ -296,7 +307,7 @@ async function endTurn(roomCode, userId) {
 // ── Get Game State ──────────────────────────────────────────
 
 async function getState(roomCode) {
-  const gs = await queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+  const gs = parseState(await queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
   if (!gs) return null;
 
   // Get property ownerships
@@ -350,7 +361,7 @@ async function sendChatMessage(roomCode, userId, text, emoji) {
 
 async function resolveLanding(roomCode, userId) {
   return transaction(async (db) => {
-    const gs = await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]);
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!gs || gs.phase !== 'landing') return { phase: gs?.phase || 'unknown' };
 
     const current = gs.players[gs.current_player_index];
