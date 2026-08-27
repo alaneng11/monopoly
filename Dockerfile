@@ -15,6 +15,6 @@ RUN mkdir -p /app/data
 EXPOSE 3000
 
 ENV NODE_ENV=production
-ENV DB_PATH=/data/hawler.db
+ENV DB_PATH=/app/data/hawler.db
 
 CMD ["node", "src/index.js"]

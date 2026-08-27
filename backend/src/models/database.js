@@ -25,6 +25,12 @@ async function getDbAsync() {
   dbReady = (async () => {
     const SQL = await initSqlJs();
     
+    // Ensure parent directory exists
+    const dbDir = path.dirname(DB_PATH);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+    
     // Load existing database or create new one
     if (fs.existsSync(DB_PATH)) {
       const buffer = fs.readFileSync(DB_PATH);
