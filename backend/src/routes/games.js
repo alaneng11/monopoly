@@ -1,115 +1,119 @@
 /**
- * Game Room & State Routes — مۆنۆپۆلی هەولێر
+ * Game Routes — مۆنۆپۆلی هەولێر
+ * Server-authoritative: all game logic validated on backend.
  */
 
 const express = require('express');
-const { run, get, all } = require('../models/database');
+const { query, queryOne, run, transaction } = require('../models/database');
 const { authMiddleware } = require('../middleware/auth');
-const { generateId, generateRoomCode, sanitizeText, validateDice } = require('../utils/validation');
+const { generateId, generateRoomCode, sanitizeText } = require('../utils/validation');
+const engine = require('../services/game_engine');
 
 const router = express.Router();
 
-// POST /api/rooms — Create room
-router.post('/', authMiddleware, (req, res) => {
+// ── Room Management ─────────────────────────────────────────
+
+router.post('/', authMiddleware, async (req, res) => {
   try {
     const { roomName, isPublic, maxPlayers, startCash } = req.body;
     const code = generateRoomCode();
-
-    run(
-      'INSERT INTO game_rooms (code, host_id, room_name, is_public, max_players, start_cash) VALUES (?, ?, ?, ?, ?, ?)',
+    await run(
+      'INSERT INTO game_rooms (code, host_id, room_name, is_public, max_players, start_cash) VALUES ($1,$2,$3,$4,$5,$6)',
       [code, req.userId, sanitizeText(roomName || '', 30), isPublic ? 1 : 0, maxPlayers || 6, startCash || 1500]
     );
-    run('INSERT INTO game_room_players (room_code, user_id, character_id, ready) VALUES (?, ?, ?, 1)',
-      [code, req.userId, 'business']);
-
-    res.status(201).json({ room: getRoom(code) });
+    await run(
+      'INSERT INTO game_room_players (room_code, user_id, character_id, ready) VALUES ($1,$2,$3,1)',
+      [code, req.userId, 'business']
+    );
+    const room = await getRoom(code);
+    res.status(201).json({ room });
   } catch (err) {
     console.error('Create room error:', err);
-    res.status(500).json({ error: 'هەڵەی ناوخۆ — ژوور دروست نەبوو.' });
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 
-// POST /api/rooms/:code/join
-router.post('/:code/join', authMiddleware, (req, res) => {
+router.post('/:code/join', authMiddleware, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const room = get('SELECT * FROM game_rooms WHERE code = ?', [code]);
+    const room = await queryOne('SELECT * FROM game_rooms WHERE code = $1', [code]);
     if (!room) return res.status(404).json({ error: 'ژوورەکە نەدۆزرایەوە.' });
     if (room.status !== 'lobby') return res.status(400).json({ error: 'یارییەکە دەستی پێکردووە.' });
 
-    const countRow = get('SELECT COUNT(*) as c FROM game_room_players WHERE room_code = ?', [code]);
-    if (countRow.c >= room.max_players) return res.status(400).json({ error: 'ژوورەکە پڕە.' });
+    const countRow = await queryOne('SELECT COUNT(*) as c FROM game_room_players WHERE room_code = $1', [code]);
+    if (parseInt(countRow.c) >= room.max_players) return res.status(400).json({ error: 'ژوورەکە پڕە.' });
 
-    const existing = get('SELECT 1 FROM game_room_players WHERE room_code = ? AND user_id = ?', [code, req.userId]);
+    const existing = await queryOne('SELECT 1 FROM game_room_players WHERE room_code = $1 AND user_id = $2', [code, req.userId]);
     if (!existing) {
-      run('INSERT INTO game_room_players (room_code, user_id, character_id) VALUES (?, ?, ?)',
+      await run('INSERT INTO game_room_players (room_code, user_id, character_id) VALUES ($1,$2,$3)',
         [code, req.userId, 'business']);
     }
+    await run('UPDATE game_rooms SET version = version + 1, updated_at = $1 WHERE code = $2', [engine.now(), code]);
+    res.json({ room: await getRoom(code) });
+  } catch (err) {
+    console.error('Join error:', err);
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
+  }
+});
 
-    run('UPDATE game_rooms SET version = version + 1, updated_at = unixepoch() WHERE code = ?', [code]);
-    res.json({ room: getRoom(code) });
+router.post('/:code/ready', authMiddleware, async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    await run('UPDATE game_room_players SET ready = $1 WHERE room_code = $2 AND user_id = $3',
+      [req.body.ready ? 1 : 0, code, req.userId]);
+    await run('UPDATE game_rooms SET version = version + 1, updated_at = $1 WHERE code = $2', [engine.now(), code]);
+    res.json({ room: await getRoom(code) });
   } catch (err) {
     res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 
-// POST /api/rooms/:code/ready
-router.post('/:code/ready', authMiddleware, (req, res) => {
+router.post('/:code/start', authMiddleware, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const { ready } = req.body;
-    run('UPDATE game_room_players SET ready = ? WHERE room_code = ? AND user_id = ?',
-      [ready ? 1 : 0, code, req.userId]);
-    run('UPDATE game_rooms SET version = version + 1, updated_at = unixepoch() WHERE code = ?', [code]);
-    res.json({ room: getRoom(code) });
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
-  }
-});
-
-// POST /api/rooms/:code/start
-router.post('/:code/start', authMiddleware, (req, res) => {
-  try {
-    const code = req.params.code.toUpperCase();
-    const room = get('SELECT * FROM game_rooms WHERE code = ?', [code]);
+    const room = await queryOne('SELECT * FROM game_rooms WHERE code = $1', [code]);
     if (!room) return res.status(404).json({ error: 'ژوورەکە نەدۆزرایەوە.' });
-    if (room.host_id !== req.userId) return res.status(403).json({ error: 'تەنها میوان دەتوانێت یاری دەستپێبکات.' });
+    if (room.host_id !== req.userId) return res.status(403).json({ error: 'تەنها میوان.' });
 
-    const players = all('SELECT * FROM game_room_players WHERE room_code = ?', [code]);
-    if (players.length < 2) return res.status(400).json({ error: 'لانی کەم ٢ یاریزان پێویستە.' });
+    const players = await query('SELECT * FROM game_room_players WHERE room_code = $1', [code]);
+    if (players.length < 2) return res.status(400).json({ error: 'لانی کەم ٢ یاریزان.' });
 
-    const gameState = initializeGameState(players, room.start_cash);
+    const seed = Math.floor(Math.random() * 2147483647);
+    const gameState = players.map((p, i) => ({
+      id: p.user_id, name: p.user_id, colorIndex: i, characterId: p.character_id,
+      kind: 'human', cash: room.start_cash, position: 0, in_jail: false,
+      jailTurns: 0, doublesInARow: 0, propertiesOwned: 0, bankrupt: false,
+    }));
 
-    run(
-      'INSERT OR REPLACE INTO game_states (room_code, players, dice, phase, seed, version) VALUES (?, ?, ?, ?, ?, 1)',
-      [code, JSON.stringify(gameState.players), JSON.stringify([1, 1]), 'awaitingRoll', gameState.seed]
+    await run(
+      'INSERT INTO game_states (room_code, players, dice, phase, seed, dice_energy, max_dice_energy) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [code, JSON.stringify(gameState), JSON.stringify([1, 1]), 'awaitingRoll', seed, 10, 10]
     );
-    run('UPDATE game_rooms SET status = ?, version = version + 1, updated_at = unixepoch() WHERE code = ?',
-      ['playing', code]);
+
+    await run('UPDATE game_rooms SET status = $1, started_at = $2, version = version + 1, updated_at = $3 WHERE code = $4',
+      ['playing', engine.now(), engine.now(), code]);
 
     res.json({ gameStarted: true, code });
   } catch (err) {
-    console.error('Start game error:', err);
-    res.status(500).json({ error: 'هەڵەی ناوخۆ — یاری دەست نەبوو.' });
+    console.error('Start error:', err);
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 
-// POST /api/rooms/:code/leave
-router.post('/:code/leave', authMiddleware, (req, res) => {
+router.post('/:code/leave', authMiddleware, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    run('DELETE FROM game_room_players WHERE room_code = ? AND user_id = ?', [code, req.userId]);
-
-    const countRow = get('SELECT COUNT(*) as c FROM game_room_players WHERE room_code = ?', [code]);
-    if (countRow.c === 0) {
-      run('UPDATE game_rooms SET status = ?, updated_at = unixepoch() WHERE code = ?', ['closed', code]);
+    await run('DELETE FROM game_room_players WHERE room_code = $1 AND user_id = $2', [code, req.userId]);
+    const countRow = await queryOne('SELECT COUNT(*) as c FROM game_room_players WHERE room_code = $1', [code]);
+    if (parseInt(countRow.c) === 0) {
+      await run('UPDATE game_rooms SET status = $1, updated_at = $2 WHERE code = $3', ['closed', engine.now(), code]);
     } else {
-      const room = get('SELECT host_id FROM game_rooms WHERE code = ?', [code]);
-      if (room && room.host_id === req.userId) {
-        const newHost = get('SELECT user_id FROM game_room_players WHERE room_code = ? LIMIT 1', [code]);
-        if (newHost) run('UPDATE game_rooms SET host_id = ?, updated_at = unixepoch() WHERE code = ?', [newHost.user_id, code]);
+      const room = await queryOne('SELECT host_id FROM game_rooms WHERE code = $1', [code]);
+      if (room?.host_id === req.userId) {
+        const newHost = await queryOne('SELECT user_id FROM game_room_players WHERE room_code = $1 LIMIT 1', [code]);
+        if (newHost) await run('UPDATE game_rooms SET host_id = $1, updated_at = $2 WHERE code = $3', [newHost.user_id, engine.now(), code]);
       }
-      run('UPDATE game_rooms SET version = version + 1, updated_at = unixepoch() WHERE code = ?', [code]);
+      await run('UPDATE game_rooms SET version = version + 1, updated_at = $1 WHERE code = $2', [engine.now(), code]);
     }
     res.json({ left: true });
   } catch (err) {
@@ -117,120 +121,141 @@ router.post('/:code/leave', authMiddleware, (req, res) => {
   }
 });
 
-// GET /api/rooms/public
 router.get('/public', async (req, res) => {
   try {
-    const rooms = all(`
+    const rooms = await query(`
       SELECT r.code, r.room_name, r.status, r.max_players, r.start_cash,
         (SELECT COUNT(*) FROM game_room_players WHERE room_code = r.code) as player_count
-      FROM game_rooms r
-      WHERE r.is_public = 1 AND r.status = 'lobby'
-      ORDER BY r.created_at DESC
-      LIMIT 50
+      FROM game_rooms r WHERE r.is_public = 1 AND r.status = 'lobby'
+      ORDER BY r.created_at DESC LIMIT 50
     `);
     res.json({ rooms: rooms.map(r => ({
       code: r.code, roomName: r.room_name, status: r.status,
-      playerCount: r.player_count, maxPlayers: r.max_players, startCash: r.start_cash,
+      playerCount: parseInt(r.player_count), maxPlayers: r.max_players, startCash: r.start_cash,
     }))});
   } catch (err) {
     res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 
-// POST /api/games/:code/roll — Server generates dice
-router.post('/:code/roll', authMiddleware, (req, res) => {
+// ── Server-Authoritative Game Actions ───────────────────────
+
+router.post('/:code/roll', authMiddleware, async (req, res) => {
   try {
-    const code = req.params.code.toUpperCase();
-    const gs = get('SELECT * FROM game_states WHERE room_code = ?', [code]);
-    if (!gs) return res.status(404).json({ error: 'یاری نەدۆزرایەوە.' });
+    const result = await engine.rollDice(req.params.code.toUpperCase(), req.userId);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    // Broadcast via WebSocket
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'dice_rolled', dice: result.dice, total: result.total, playerId: req.userId, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
 
-    const players = JSON.parse(gs.players);
-    const current = players[gs.current_player_index];
-    if (!current || current.id !== req.userId) return res.status(403).json({ error: 'نەک ئێستای تۆ.' });
-    if (gs.phase !== 'awaitingRoll') return res.status(400).json({ error: 'ئێستا کاتی داوەدان نییە.' });
+router.post('/:code/move', authMiddleware, async (req, res) => {
+  try {
+    const result = await engine.movePlayer(req.params.code.toUpperCase(), req.userId);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'player_moved', playerId: req.userId, position: result.position, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
 
-    const d1 = Math.floor(Math.random() * 6) + 1;
-    const d2 = Math.floor(Math.random() * 6) + 1;
+router.post('/:code/resolve', authMiddleware, async (req, res) => {
+  try {
+    const result = await engine.resolveLanding(req.params.code.toUpperCase(), req.userId);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'landing_resolved', playerId: req.userId, result, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
 
-    run(
-      `UPDATE game_states SET dice = ?, phase = 'rolling', dice_energy = dice_energy - 1,
-       version = version + 1, updated_at = unixepoch() WHERE room_code = ?`,
-      [JSON.stringify([d1, d2]), code]
+router.post('/:code/buy', authMiddleware, async (req, res) => {
+  try {
+    const result = await engine.buyProperty(req.params.code.toUpperCase(), req.userId);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'property_bought', playerId: req.userId, ...result, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
+
+router.post('/:code/upgrade', authMiddleware, async (req, res) => {
+  try {
+    const { tileIndex } = req.body;
+    const result = await engine.upgradeProperty(req.params.code.toUpperCase(), req.userId, tileIndex);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'property_upgraded', playerId: req.userId, ...result, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
+
+router.post('/:code/end-turn', authMiddleware, async (req, res) => {
+  try {
+    const result = await engine.endTurn(req.params.code.toUpperCase(), req.userId);
+    const state = await engine.getState(req.params.code.toUpperCase());
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'turn_ended', playerId: req.userId, ...result, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
+
+router.get('/:code/state', authMiddleware, async (req, res) => {
+  try {
+    const state = await engine.getState(req.params.code.toUpperCase());
+    if (!state) return res.status(404).json({ error: 'یاری نەدۆزرایەوە.' });
+    res.json(state);
+  } catch (err) {
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
+  }
+});
+
+// ── Chat ────────────────────────────────────────────────────
+
+router.post('/:code/chat', authMiddleware, async (req, res) => {
+  try {
+    const { text, emoji } = req.body;
+    const msg = await engine.sendChatMessage(req.params.code.toUpperCase(), req.userId, text, emoji);
+    try { require('../index').broadcastToRoom(req.params.code.toUpperCase(), { type: 'game_chat', message: msg }); } catch (_) {}
+    res.status(201).json({ message: msg });
+  } catch (err) {
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
+  }
+});
+
+router.get('/:code/chat', authMiddleware, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const messages = await query(
+      'SELECT * FROM game_chat_messages WHERE game_room_id = $1 ORDER BY timestamp DESC LIMIT $2',
+      [req.params.code.toUpperCase(), limit]
     );
-
-    res.json({ dice: [d1, d2], total: d1 + d2 });
+    res.json({ messages: messages.reverse() });
   } catch (err) {
     res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 
-// GET /api/games/:code/state
-router.get('/:code/state', authMiddleware, (req, res) => {
-  try {
-    const code = req.params.code.toUpperCase();
-    const gs = get('SELECT * FROM game_states WHERE room_code = ?', [code]);
-    if (!gs) return res.status(404).json({ error: 'یاری نەدۆزرایەوە.' });
+// ── Helper ──────────────────────────────────────────────────
 
-    res.json({
-      round: gs.round, currentPlayerIndex: gs.current_player_index, phase: gs.phase,
-      dice: JSON.parse(gs.dice || '[1,1]'), players: JSON.parse(gs.players || '[]'),
-      tiles: JSON.parse(gs.tiles || '{}'), freeCoins: gs.free_coins, winnerId: gs.winner_id,
-      diceMultiplier: gs.dice_multiplier, diceEnergy: gs.dice_energy, version: gs.version,
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
-  }
-});
-
-// POST /api/games/:code/end-turn
-router.post('/:code/end-turn', authMiddleware, (req, res) => {
-  try {
-    const code = req.params.code.toUpperCase();
-    const gs = get('SELECT * FROM game_states WHERE room_code = ?', [code]);
-    if (!gs) return res.status(404).json({ error: 'یاری نەدۆزرایەوە.' });
-
-    const players = JSON.parse(gs.players);
-    const current = players[gs.current_player_index];
-    if (!current || current.id !== req.userId) return res.status(403).json({ error: 'نەک ئێستای تۆ.' });
-
-    let nextIndex = (gs.current_player_index + 1) % players.length;
-    const newRound = nextIndex === 0 ? gs.round + 1 : gs.round;
-
-    run(
-      `UPDATE game_states SET current_player_index = ?, round = ?, phase = 'awaitingRoll',
-       dice_multiplier = 1, dice_energy = MIN(dice_energy + 1, 10),
-       version = version + 1, updated_at = unixepoch() WHERE room_code = ?`,
-      [nextIndex, newRound, code]
-    );
-
-    res.json({ success: true, nextPlayerIndex: nextIndex, round: newRound });
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
-  }
-});
-
-function getRoom(code) {
-  const room = get('SELECT * FROM game_rooms WHERE code = ?', [code]);
+async function getRoom(code) {
+  const room = await queryOne('SELECT * FROM game_rooms WHERE code = $1', [code]);
   if (!room) return null;
-  const players = all('SELECT * FROM game_room_players WHERE room_code = ?', [code]);
+  const players = await query('SELECT * FROM game_room_players WHERE room_code = $1', [code]);
   return {
     code: room.code, hostId: room.host_id, roomName: room.room_name,
     status: room.status, maxPlayers: room.max_players, isPublic: !!room.is_public,
     startCash: room.start_cash, version: room.version,
     players: players.map(p => ({
       id: p.user_id, characterId: p.character_id, ready: !!p.ready, connected: !!p.connected,
-    })),
-  };
-}
-
-function initializeGameState(players, startCash) {
-  const seed = Math.floor(Math.random() * 2147483647);
-  return {
-    seed,
-    players: players.map((p, i) => ({
-      id: p.user_id, name: p.user_id, colorIndex: i, characterId: p.character_id,
-      kind: 'human', cash: startCash, position: 0, inJail: false,
-      jailTurns: 0, doublesInARow: 0, propertiesOwned: 0, bankrupt: false,
     })),
   };
 }

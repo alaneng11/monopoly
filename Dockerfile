@@ -6,10 +6,11 @@ WORKDIR /app
 COPY backend/package*.json ./
 RUN npm ci --omit=dev
 
-# Copy backend source
+# Copy backend source and board data
 COPY backend/src/ ./src/
+COPY backend/board_data.json ./
 
-# Create data directory for SQLite
+# Create data directory for SQLite fallback
 RUN mkdir -p /app/data
 
 EXPOSE 3000
@@ -17,4 +18,4 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV DB_PATH=/app/data/hawler.db
 
-CMD ["node", "src/index.js"]
+CMD ["sh", "-c", "node src/migrate.js && node src/seed.js && node src/index.js"]

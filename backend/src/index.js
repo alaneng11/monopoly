@@ -1,5 +1,6 @@
 /**
- * مۆنۆپۆلی هەولێر — Backend Server
+ * مۆنۆپۆلی هەولێر — Backend Server v2.0
+ * PostgreSQL (Railway production) / SQLite (local dev)
  */
 
 require('dotenv').config();
@@ -10,9 +11,9 @@ const helmet = require('helmet');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 
-const { getDbAsync, getDb, run, get, all } = require('./models/database');
-const { authMiddleware, optionalAuth } = require('./middleware/auth');
+const { initDb, queryOne, query, run } = require('./models/database');
 
+// Route imports
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const gameRoutes = require('./routes/games');
@@ -23,35 +24,27 @@ const friendRoutes = require('./routes/friends');
 const app = express();
 const server = http.createServer(app);
 
-// ============================================
-// Middleware
-// ============================================
+// ── Middleware ───────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
 app.use(express.json({ limit: '1mb' }));
 
-// ============================================
-// Health Check
-// ============================================
+// ── Health ──────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   try {
-    const db = getDb();
-    const userCount = get('SELECT COUNT(*) as c FROM users');
+    const row = await queryOne('SELECT COUNT(*) as c FROM users');
     res.json({
-      status: 'ok',
-      service: 'hawler-monopoly-backend',
-      version: '1.0.0',
+      status: 'ok', service: 'hawler-monopoly-backend', version: '2.0.0',
       timestamp: new Date().toISOString(),
-      stats: { users: userCount?.c || 0 },
+      database: process.env.DATABASE_URL ? 'postgresql' : 'sqlite',
+      stats: { users: parseInt(row?.c || 0) },
     });
   } catch (err) {
     res.status(503).json({ status: 'error', error: err.message });
   }
 });
 
-// ============================================
-// API Routes
-// ============================================
+// ── Routes ──────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/rooms', gameRoutes);
@@ -60,17 +53,33 @@ app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/friends', friendRoutes);
 
-// ============================================
-// WebSocket — Real-time Multiplayer & Chat
-// ============================================
+// ── WebSocket ───────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
-const clients = new Map();
+const clients = new Map(); // userId → Set<{ws, rooms}>
+
+function broadcastToRoom(roomCode, message, excludeUserId = null) {
+  const data = JSON.stringify(message);
+  // Get all players in this room
+  query('SELECT user_id FROM game_room_players WHERE room_code = $1', [roomCode])
+    .then(players => {
+      const playerIds = new Set(players.map(p => p.user_id));
+      for (const [uid, conns] of clients) {
+        if (uid === excludeUserId || !playerIds.has(uid)) continue;
+        for (const conn of conns) {
+          if (conn.rooms.has(roomCode) && conn.ws.readyState === 1) {
+            conn.ws.send(data);
+          }
+        }
+      }
+    })
+    .catch(() => {});
+}
 
 wss.on('connection', (ws, req) => {
   let userId = null;
   let clientRooms = new Set();
 
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
       switch (msg.type) {
@@ -88,7 +97,7 @@ wss.on('connection', (ws, req) => {
           break;
         }
         case 'join_room': {
-          if (!userId) return ws.send(JSON.stringify({ type: 'error', error: 'سەرەتا بچۆرە ژوورەوە.' }));
+          if (!userId) break;
           if (msg.roomCode) {
             clientRooms.add(msg.roomCode);
             broadcastToRoom(msg.roomCode, { type: 'player_joined', userId }, userId);
@@ -97,47 +106,25 @@ wss.on('connection', (ws, req) => {
           break;
         }
         case 'leave_room': {
-          if (!userId || !msg.roomCode) return;
+          if (!userId || !msg.roomCode) break;
           clientRooms.delete(msg.roomCode);
           broadcastToRoom(msg.roomCode, { type: 'player_left', userId }, userId);
           break;
         }
         case 'game_chat': {
-          if (!userId || !msg.roomCode || !msg.text) return;
-          const { generateId, sanitizeText } = require('./utils/validation');
-          const user = get('SELECT display_name FROM users WHERE id = ?', [userId]);
-          const chatMsg = {
-            id: generateId(), senderId: userId,
-            senderName: user?.display_name || 'یاریزان',
-            text: sanitizeText(msg.text, 500),
-            emoji: msg.emoji || null, isEmoji: !!msg.emoji,
-            timestamp: Math.floor(Date.now() / 1000),
-            gameRoomId: msg.roomCode,
-          };
-          run(
-            'INSERT INTO game_chat_messages (id, game_room_id, sender_id, sender_name, text, emoji, is_emoji, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [chatMsg.id, msg.roomCode, chatMsg.senderId, chatMsg.senderName, chatMsg.text, chatMsg.emoji, chatMsg.isEmoji ? 1 : 0, chatMsg.timestamp]
-          );
+          if (!userId || !msg.roomCode || !msg.text) break;
+          const engine = require('./services/game_engine');
+          const chatMsg = await engine.sendChatMessage(msg.roomCode, userId, msg.text, msg.emoji);
           broadcastToRoom(msg.roomCode, { type: 'game_chat', message: chatMsg });
           break;
         }
-        case 'game_chat_emoji': {
-          if (!userId || !msg.roomCode || !msg.emoji) return;
-          broadcastToRoom(msg.roomCode, {
-            type: 'game_chat_emoji', emoji: msg.emoji, senderId: userId,
-            timestamp: Math.floor(Date.now() / 1000),
-          });
-          break;
-        }
         case 'game_state_update': {
-          if (!userId || !msg.roomCode) return;
-          broadcastToRoom(msg.roomCode, {
-            type: 'game_state_update', state: msg.state, version: msg.version,
-          }, userId);
+          if (!userId || !msg.roomCode) break;
+          broadcastToRoom(msg.roomCode, { type: 'game_state_update', state: msg.state, version: msg.version }, userId);
           break;
         }
       }
-    } catch (e) { /* ignore malformed messages */ }
+    } catch (e) { /* ignore */ }
   });
 
   ws.on('close', () => {
@@ -156,41 +143,30 @@ wss.on('connection', (ws, req) => {
   ws.on('error', () => {});
 });
 
-function broadcastToRoom(roomCode, message, excludeUserId = null) {
-  try {
-    const players = all('SELECT user_id FROM game_room_players WHERE room_code = ?', [roomCode]);
-    const playerIds = new Set(players.map(p => p.user_id));
-    const data = JSON.stringify(message);
-    for (const [uid, conns] of clients) {
-      if (uid === excludeUserId || !playerIds.has(uid)) continue;
-      for (const conn of conns) {
-        if (conn.rooms.has(roomCode) && conn.ws.readyState === 1) {
-          conn.ws.send(data);
-        }
-      }
-    }
-  } catch (_) {}
-}
-
-// ============================================
-// Start Server
-// ============================================
+// ── Start ───────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
 (async () => {
   try {
-    await getDbAsync();
+    await initDb();
     console.log('✅ Database initialized');
   } catch (err) {
-    console.error('❌ Database initialization failed:', err.message);
+    console.error('❌ Database failed:', err.message);
     process.exit(1);
   }
 
+  // Run migrations
+  try {
+    require('./migrate');
+  } catch (e) {
+    console.log('Migration skipped (will run via separate command)');
+  }
+
   server.listen(PORT, () => {
-    console.log(`🏰 مۆنۆپۆلی هەولێر backend running on port ${PORT}`);
+    console.log(`🏰 مۆنۆپۆلی هەولێر backend v2.0 on port ${PORT}`);
     console.log(`   Health: http://localhost:${PORT}/health`);
     console.log(`   WebSocket: ws://localhost:${PORT}/ws`);
   });
 })();
 
-module.exports = { app, server };
+module.exports = { app, server, broadcastToRoom };
