@@ -1,25 +1,56 @@
 import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
+import '../../data/online/api_client.dart';
+import '../../data/online/chat_repository.dart';
+import '../../presentation/providers.dart';
 
-class SplashScreen extends StatefulWidget {
+class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
 
   @override
-  State<SplashScreen> createState() => _SplashScreenState();
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(milliseconds: 2600), () {
-      if (!mounted) return;
+    _checkAuthAndNavigate();
+  }
+
+  Future<void> _checkAuthAndNavigate() async {
+    final startTime = DateTime.now();
+    final hasSession = await ApiClient.instance.restoreSession();
+
+    if (hasSession) {
+      final me = await ApiClient.instance.getProfile();
+      if (me.ok && me.data != null) {
+        final user = me.data!['user'] as Map<String, dynamic>?;
+        if (user != null) {
+          await ref.read(profileProvider.notifier).syncWithServer(user);
+        }
+      }
+      ChatRepository.instance.init();
+    }
+
+    final elapsed = DateTime.now().difference(startTime);
+    final remaining = const Duration(milliseconds: 1800) - elapsed;
+    if (remaining > Duration.zero) {
+      await Future.delayed(remaining);
+    }
+
+    if (!mounted) return;
+    if (hasSession) {
+      context.go('/home');
+    } else {
       context.go('/login');
-    });
+    }
   }
 
   @override

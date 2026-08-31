@@ -69,7 +69,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         FadeInUp(delay: const Duration(milliseconds: 150), child: _quickGrid()),
                         const SizedBox(height: 28),
                         SectionHeader(
-                          title: 'دۆستەکان', actionLabel: 'هەمووی', onAction: () {},
+                          title: 'دۆستەکان', actionLabel: 'هەمووی', onAction: () => _push(const FriendsScreen()),
                         ),
                         const SizedBox(height: 14),
                         FadeInUp(delay: const Duration(milliseconds: 200), child: _friendsRow()),

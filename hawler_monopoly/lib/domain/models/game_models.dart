@@ -661,6 +661,7 @@ class GameState {
   final Map<int, CollectionBonus> completedCollections;
   final List<CompletedChallenge> completedChallenges;
   final List<MatchRecord> matchHistory;
+  final int? turnStartedAt; // Unix epoch seconds — from server
 
   const GameState({
     required this.board,
@@ -686,6 +687,7 @@ class GameState {
     this.completedCollections = const {},
     this.completedChallenges = const [],
     this.matchHistory = const [],
+    this.turnStartedAt,
   });
 
   Player? get currentPlayer => players.isEmpty ? null : players[currentPlayerIndex % players.length];
@@ -778,6 +780,8 @@ class GameState {
     Map<int, CollectionBonus>? completedCollections,
     List<CompletedChallenge>? completedChallenges,
     List<MatchRecord>? matchHistory,
+    int? turnStartedAt,
+    bool clearTurnStartedAt = false,
   }) =>
       GameState(
         board: board,
@@ -801,6 +805,7 @@ class GameState {
         completedCollections: completedCollections ?? this.completedCollections,
         completedChallenges: completedChallenges ?? this.completedChallenges,
         matchHistory: matchHistory ?? this.matchHistory,
+        turnStartedAt: clearTurnStartedAt ? null : (turnStartedAt ?? this.turnStartedAt),
         startedAt: startedAt,
         seed: seed,
       );

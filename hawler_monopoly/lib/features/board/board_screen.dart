@@ -1,13 +1,18 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/services/sound_service.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
+import '../../data/online/api_client.dart';
+import '../../data/online/web_socket_service.dart';
 import '../../domain/game_engine.dart';
 import '../../domain/models/game_models.dart';
 import '../../presentation/game_session_controller.dart';
+import '../../presentation/providers.dart';
 import '../player/player_info_widget.dart';
 import '../cards/chance_card.dart';
 import '../property/buy_property_dialog.dart';
@@ -32,15 +37,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
   late final AnimationController _shake;
   bool _winnerPushed = false;
   bool _cardShown = false;
+  bool _wsConnected = true;
+  StreamSubscription<bool>? _connSub;
 
   @override
   void initState() {
     super.initState();
     _shake = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    // Subscribe to WebSocket connection state
+    _connSub = WebSocketService.instance.onConnectionState.listen((connected) {
+      if (mounted) setState(() => _wsConnected = connected);
+    });
   }
 
   @override
   void dispose() {
+    _connSub?.cancel();
     _shake.dispose();
     super.dispose();
   }
@@ -68,8 +80,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
       );
     }
 
-    // دیالۆگی کارت
-    if (session.drawnCard != null && !_cardShown) {
+    final isCurHuman = game.currentPlayer?.kind == PlayerKind.human;
+    final isMyTurn = session.isOnline
+        ? (game.currentPlayer?.id == session.myPlayerId || (ApiClient.instance.currentUserId.isNotEmpty && game.currentPlayer?.id == ApiClient.instance.currentUserId))
+        : isCurHuman;
+
+    // دیالۆگی کارت — تەنها بۆ یاریزانی مرۆڤ و لە کاتی ڕیزی خۆی
+    if (session.drawnCard != null && !_cardShown && isCurHuman && isMyTurn) {
       _cardShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -78,19 +95,24 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
         showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (_) => GameCardDialog(
+          builder: (dialogCtx) => GameCardDialog(
             card: card,
             playerName: cur?.name ?? '',
-            onClose: () => controller.acknowledgeCard(),
+            onClose: () {
+              _cardShown = false;
+              Navigator.of(dialogCtx, rootNavigator: true).pop();
+              controller.acknowledgeCard();
+            },
           ),
-        );
+        ).whenComplete(() => _cardShown = false);
       });
     }
     if (session.drawnCard == null && _cardShown) _cardShown = false;
 
-    // دیالۆگی کڕین
+    // دیالۆگی کڕین — تەنها بۆ یاریزانی مرۆڤ لە کاتی ڕیزی خۆی
     if (game.phase == GamePhase.propertyDecision &&
-        game.currentPlayer?.kind == PlayerKind.human &&
+        isCurHuman &&
+        isMyTurn &&
         !session.showHandoff &&
         !session.busy) {
       _maybeShowBuyDialog(session, game);
@@ -149,6 +171,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
             child: Column(
               children: [
                 _header(session, game),
+                // Reconnect banner when WS is disconnected in online game
+                if (session.isOnline && !_wsConnected) const ReconnectBanner(),
                 if (game.activeEvent != null) _eventBanner(game.activeEvent!),
                 const SizedBox(height: 4),
                 Expanded(
@@ -181,7 +205,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
                                 borderRadius: BorderRadius.circular(23),
                                 child: Stack(
                                   children: [
-                                    CenterScene(boardSize: boardSize),
+                                    CenterScene(
+                                      boardSize: boardSize,
+                                      boardTheme: ref.watch(profileProvider).value?.equippedBoardTheme ?? 'classic',
+                                    ),
                                     for (int i = 0; i < uiTiles.length; i++)
                                       _positionedTile(i, cell, uiTiles[i], game),
                                     ..._playerTokens(game, cell),
@@ -209,10 +236,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
                     onBid: (v) => controller.bid(v),
                     onPass: () => controller.passBid(),
                   ),
-                if (game.pendingTrade != null && session.showTradeDialog)
-                  _TradeAcceptPanel(game: game, controller: controller),
-                if (game.pendingTrade != null && !session.showTradeDialog && game.phase == GamePhase.trading)
-                  _TradeWaitingPanel(game: game, controller: controller),
+                if (game.pendingTrade != null) ...[
+                  if (session.showTradeDialog &&
+                      (session.isOnline
+                          ? (game.pendingTrade!.toPlayerId == session.myPlayerId ||
+                              game.pendingTrade!.toPlayerId == ApiClient.instance.currentUserId)
+                          : (game.playerById(game.pendingTrade!.toPlayerId)?.kind == PlayerKind.human)))
+                    _TradeAcceptPanel(game: game, controller: controller)
+                  else if (game.phase == GamePhase.trading)
+                    _TradeWaitingPanel(game: game, controller: controller),
+                ],
                 const SizedBox(height: 2),
                 PlayerInfoBar(
                   players: game.players,
@@ -300,6 +333,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
 
   Widget _header(GameSession session, GameState game) {
     final cur = game.currentPlayer;
+    final isMyTurn = session.isOnline
+        ? (cur?.id == session.myPlayerId || cur?.id == ApiClient.instance.currentUserId)
+        : (cur?.kind == PlayerKind.human);
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
       child: Row(
@@ -326,6 +362,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  // Turn timer — only in online mode and awaiting roll
+                  if (session.isOnline &&
+                      isMyTurn &&
+                      game.phase == GamePhase.awaitingRoll) ...[
+                    const SizedBox(width: 6),
+                    TurnTimerWidget(
+                      turnStartedAt: game.turnStartedAt,
+                      totalSeconds: 30,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -342,6 +388,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
               ],
             ),
           ),
+          // Connection indicator (online only)
+          if (session.isOnline) ...[
+            const SizedBox(width: 8),
+            ConnectionDot(connected: _wsConnected),
+          ],
+          if (!session.isOnline) ...[
+            const SizedBox(width: 8),
+            CircleIconButton(
+              icon: Icons.handshake_rounded,
+              onTap: game.phase != GamePhase.trading && game.pendingTrade == null
+                  ? () => _openTradeDialog(session, game, ref.read(gameSessionProvider.notifier))
+                  : null,
+            ),
+          ],
+          const SizedBox(width: 8),
+          CircleIconButton(icon: Icons.chat_bubble_outline, onTap: _openGameChat),
           const SizedBox(width: 8),
           CircleIconButton(icon: Icons.account_balance_wallet, onTap: () => _showMyProperties(session, game)),
         ],
@@ -394,8 +456,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
 
   Widget _positionedTile(int i, double cell, TileData uiTile, GameState game) {
     final (row, col) = _gridPos(i);
-    final corner = _isCorner(i);
-    final rotated = (col == 0 || col == 10) && !corner;
+    final rotated = (col == 0 || col == 10) && !_isCorner(i);
     final ts = game.tiles[i];
     final def = game.board[i];
     final owner = ts?.ownerId != null ? game.playerById(ts!.ownerId!) : null;
@@ -457,110 +518,129 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
 
   Widget _actionBar(GameSession session, GameState game, GameSessionController controller) {
     final cur = game.currentPlayer;
-    final human = cur?.kind == PlayerKind.human;
-    final canRoll = game.phase == GamePhase.awaitingRoll && human && !session.diceRolling && !session.tokenMoving && !session.busy && !session.showHandoff;
-    final canEndTurn = game.phase == GamePhase.endTurn && human;
+    final isMyTurn = session.isOnline
+        ? (cur?.id == session.myPlayerId || (ApiClient.instance.currentUserId.isNotEmpty && cur?.id == ApiClient.instance.currentUserId))
+        : (cur?.kind == PlayerKind.human);
+    final canRoll = isMyTurn &&
+        game.phase == GamePhase.awaitingRoll &&
+        !session.diceRolling &&
+        !session.tokenMoving &&
+        !session.busy &&
+        !session.showHandoff;
+    final canEndTurn = isMyTurn && game.phase == GamePhase.endTurn;
 
-    return Stack(
-      alignment: Alignment.topCenter,
-      clipBehavior: Clip.none,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // موڵکەکان
-            CircleIconButton(icon: Icons.home_rounded, onTap: () => _showMyProperties(session, game)),
-            const SizedBox(width: 12),
-            // بازرگانی
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.night2.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.gold.withValues(alpha: 0.28), width: 1.2),
+        boxShadow: AppColors.softShadow(blur: 20),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // 1. Dice Area (Left)
+          _DiceCluster(session: session, game: game),
+
+          const SizedBox(width: 8),
+
+          // 2. Primary Action Button (Center - Expanded)
+          Expanded(
+            child: session.aiActing
+                ? Container(
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: AppColors.night.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppColors.info.withValues(alpha: 0.4)),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.info),
+                        ),
+                        SizedBox(width: 8),
+                        Text('کۆمپیوتەر بیر دەکاتەوە...', style: TextStyle(fontSize: 11, color: AppColors.ivory)),
+                      ],
+                    ),
+                  )
+                : (session.isOnline && !isMyTurn)
+                    ? Container(
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: AppColors.night.withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppColors.gold.withValues(alpha: 0.25)),
+                        ),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 9,
+                              height: 9,
+                              decoration: BoxDecoration(color: cur?.color ?? AppColors.gold, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 8),
+                            Text('ڕیزی ${cur?.name ?? 'یاریزان'}ە...',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.goldBright)),
+                          ],
+                        ),
+                      )
+                    : GoldenButton(
+                        label: canEndTurn
+                            ? 'کۆتایی ڕیز'
+                            : (canRoll
+                                ? 'هاویشتنی بەرد'
+                                : (cur?.inJail == true && canRoll ? 'هەوڵی دەرچوون' : 'چاوەڕوانی...')),
+                        icon: canEndTurn ? Icons.flag_circle_rounded : Icons.casino_rounded,
+                        height: 46,
+                        fontSize: 13,
+                        onTap: canEndTurn
+                            ? () {
+                                SoundService.instance.vibrateSuccess();
+                                SoundService.instance.playMove();
+                                controller.endTurn();
+                              }
+                            : (canRoll
+                                ? () {
+                                    SoundService.instance.vibrateDice();
+                                    SoundService.instance.playDice();
+                                    controller.roll();
+                                  }
+                                : null),
+                      ),
+          ),
+
+          const SizedBox(width: 8),
+
+          // 3. Quick Action Button (Right)
+          if (cur?.inJail == true && isMyTurn && cur!.cash >= GameEngine.bailCost)
             CircleIconButton(
-              icon: Icons.handshake_rounded,
-              onTap: game.phase != GamePhase.trading && game.pendingTrade == null
-                  ? () => _openTradeDialog(session, game, controller)
-                  : null,
-            ),
-            const SizedBox(width: 12),
-            // گفتوگۆ
+              icon: Icons.lock_open,
+              size: 42,
+              onTap: controller.payBail,
+            )
+          else if (isMyTurn && canRoll && !session.isOnline)
+            _MultiplierSelector(
+              current: game.diceMultiplier,
+              energy: game.diceEnergy,
+              onSelect: controller.setDiceMultiplier,
+            )
+          else
             CircleIconButton(
               icon: Icons.chat_bubble_outline,
-              onTap: () => _openGameChat(),
+              size: 42,
+              onTap: _openGameChat,
             ),
-            const SizedBox(width: 12),
-            CircleIconButton(
-              icon: Icons.settings,
-              onTap: () => _showExitDialog(controller),
-            ),
-          ],
-        ),
-        Positioned(
-          top: -34,
-          child: Column(
-            children: [
-              _DiceCluster(session: session, game: game),
-              const SizedBox(height: 6),
-              // ڕیزی داواکاری ئێرژی (Multiplier)
-              if (human && canRoll)
-                _MultiplierSelector(
-                  current: game.diceMultiplier,
-                  energy: game.diceEnergy,
-                  onSelect: controller.setDiceMultiplier,
-                ),
-              const SizedBox(height: 8),
-              if (human && cur?.inJail == true)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: GoldenButton(
-                    label: 'دەرچوون بە ${GameEngine.bailCost} زێڕ',
-                    icon: Icons.lock_open,
-                    height: 40,
-                    fontSize: 12,
-                    width: 200,
-                    variant: ButtonVariant.glass,
-                    onTap: (cur!.cash >= GameEngine.bailCost) ? controller.payBail : null,
-                  ),
-                ),
-              Row(
-                children: [
-                  GoldenButton(
-                    label: game.phase == GamePhase.endTurn && human
-                        ? 'کۆتایی ڕیز'
-                        : (canRoll ? 'بەردەکە' : (cur?.inJail == true && canRoll ? 'هەوڵی دەرچوون' : '')),
-                    icon: game.phase == GamePhase.endTurn && human
-                        ? Icons.flag_circle_rounded
-                        : Icons.casino_rounded,
-                    height: 52,
-                    width: 170,
-                    onTap: canEndTurn ? controller.endTurn : (canRoll ? controller.roll : null),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        if (session.aiActing)
-          Positioned(
-            bottom: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.night.withValues(alpha: 0.85),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.info.withValues(alpha: 0.5)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.info),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('کۆمپیوتەر بیر دەکاتەوە...', style: AppTextStyles.caption),
-                ],
-              ),
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -568,17 +648,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
     final session = ref.read(gameSessionProvider);
     final game = session.game;
     if (game == null) return;
-    // بۆ ئۆنلاین: gameRoomId لازمە — بۆ ناوخۆیی: شوێنی جێگری
-    final roomId = 'local_${game.seed}';
-    final cur = game.currentPlayer;
+    final roomId = session.roomCode.isNotEmpty ? session.roomCode : 'local_${game.seed}';
+    final profile = ref.read(profileProvider).value;
+    final myId = session.myPlayerId.isNotEmpty
+        ? session.myPlayerId
+        : (ApiClient.instance.currentUserId.isNotEmpty
+            ? ApiClient.instance.currentUserId
+            : (game.currentPlayer?.id ?? ''));
+    final myName = profile?.name ?? (game.currentPlayer?.name ?? 'یاریزان');
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => GameChatPanel(
         gameRoomId: roomId,
-        myId: cur?.id ?? '',
-        myName: cur?.name ?? 'یاریزان',
+        myId: myId,
+        myName: myName,
       ),
     );
   }
@@ -908,7 +993,8 @@ class _Pips extends StatelessWidget {
 /// دیمەنی ناوەندی قەڵا (پارێزراو لە کۆدە کۆنەکەوە بە نوێکردنەوەی ئاسایی).
 class CenterScene extends StatefulWidget {
   final double boardSize;
-  const CenterScene({super.key, required this.boardSize});
+  final String boardTheme;
+  const CenterScene({super.key, required this.boardSize, this.boardTheme = 'classic'});
 
   @override
   State<CenterScene> createState() => _CenterSceneState();
@@ -926,6 +1012,13 @@ class _CenterSceneState extends State<CenterScene> with SingleTickerProviderStat
     super.dispose();
   }
 
+  List<Color> get _gradientColors => switch (widget.boardTheme) {
+        'night' => const [Color(0x331F5C8B), Color(0xFF0F1A2E), Color(0xFF0D0906)],
+        'golden' => const [Color(0x44E8B94A), Color(0xFF3D2A0F), Color(0xFF19110B)],
+        'emerald' => const [Color(0x332FBF71), Color(0xFF0F2E22), Color(0xFF0A140F)],
+        _ => const [Color(0x3357B3C6), Color(0xFF2A163D), Color(0xFF19110B)],
+      };
+
   @override
   Widget build(BuildContext context) {
     final inner = widget.boardSize * (9 / 11);
@@ -941,8 +1034,8 @@ class _CenterSceneState extends State<CenterScene> with SingleTickerProviderStat
               borderRadius: BorderRadius.circular(inner * 0.03),
               child: Container(
                 decoration: BoxDecoration(
-                  gradient: const RadialGradient(
-                    colors: [Color(0x3357B3C6), Color(0xFF2A163D), Color(0xFF19110B)],
+                  gradient: RadialGradient(
+                    colors: _gradientColors,
                     radius: 1.15,
                     center: Alignment.topCenter,
                   ),

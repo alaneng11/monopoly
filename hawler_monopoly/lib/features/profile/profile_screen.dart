@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animate_do/animate_do.dart';
+
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
 import '../../presentation/providers.dart';
 
-/// پرۆفایل — داتای ڕاستەقینەی یاریزان و ئامارەکان.
+/// پرۆفایل — داتای ڕاستەقینەی یاریزان لە سێرڤەر و ئامارەکان.
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
+
+  static const _presetAvatars = ['👑', '🦁', '🦅', '⚔️', '🏰', '💰', '🎲', '🎩', '🌟', '💎'];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,30 +35,86 @@ class ProfileScreen extends ConsumerWidget {
           content: TextField(
             controller: editController,
             style: AppTextStyles.body,
-            maxLength: 16,
+            maxLength: 20,
             decoration: InputDecoration(
               counterText: '',
               hintText: 'ناوی نوێ',
               hintStyle: AppTextStyles.bodySoft,
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.06),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('پاشگەزبوونەوە', style: AppTextStyles.goldLabel),
+              child: Text('پاشگەزبوونەوە', style: AppTextStyles.caption),
             ),
             TextButton(
               onPressed: () async {
-                await ref.read(profileProvider.notifier).setName(editController.text);
+                final newName = editController.text.trim();
+                if (newName.isNotEmpty) {
+                  await ref.read(profileProvider.notifier).setName(newName);
+                }
                 if (context.mounted) Navigator.pop(context);
               },
-              child: Text('پاشەکەوت', style: AppTextStyles.caption.copyWith(color: AppColors.success)),
+              child: Text('پاشەکەوت', style: AppTextStyles.goldLabel),
             ),
           ],
         ),
       );
     }
+
+    void chooseAvatar() {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: AppColors.royalBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: AppColors.gold.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('هەڵبژاردنی وێنەی پرۆفایل', style: AppTextStyles.h3),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: _presetAvatars.map((emoji) {
+                  return GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      await ref.read(profileProvider.notifier).setAvatar(emoji);
+                    },
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.glassBorder),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final avatarDisplay = profile.avatarUrl != null && profile.avatarUrl!.isNotEmpty
+        ? profile.avatarUrl!
+        : (profile.name.isNotEmpty ? profile.name.substring(0, 1) : '؟');
 
     return Scaffold(
       body: LuxuryBackground(
@@ -76,34 +136,103 @@ class ProfileScreen extends ConsumerWidget {
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
-                  child: ResponsiveCenter(child: Column(
-                    children: [
-                      FadeInDown(
-                        child: AvatarRing(
-                          size: 100,
-                          initials: profile.name.isNotEmpty ? profile.name.substring(0, 1) : '؟',
-                          level: profile.level,
+                  child: ResponsiveCenter(
+                    child: Column(
+                      children: [
+                        FadeInDown(
+                          child: GestureDetector(
+                            onTap: chooseAvatar,
+                            child: Stack(
+                              children: [
+                                AvatarRing(
+                                  size: 96,
+                                  initials: avatarDisplay,
+                                  level: profile.level,
+                                ),
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    width: 30,
+                                    height: 30,
+                                    decoration: BoxDecoration(
+                                      gradient: AppColors.goldGradient,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: AppColors.night, width: 2),
+                                    ),
+                                    child: const Icon(Icons.camera_alt, size: 16, color: AppColors.night),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      Text(profile.name, style: AppTextStyles.h2),
-                      Text('@${profile.username}', style: AppTextStyles.caption),
-                      const SizedBox(height: 6),
-                      const GoldDivider(),
-                      const SizedBox(height: 20),
-                      _statsRow(profile),
-                      const SizedBox(height: 24),
-                      const SectionHeader(title: 'ئاستی پێشکەوتن'),
-                      const SizedBox(height: 10),
-                      _levelCard(profile),
-                    ],
-                  )),
+                        const SizedBox(height: 14),
+                        Text(profile.name, style: AppTextStyles.h2),
+                        const SizedBox(height: 4),
+                        if (profile.id.isNotEmpty) ...[
+                          GestureDetector(
+                            onTap: () {
+                              Clipboard.setData(ClipboardData(text: profile.id));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('ناسنامەی (ID) کۆپیکرا')),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: AppColors.glassBorder),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'ID: ${profile.id.substring(0, profile.id.length > 12 ? 12 : profile.id.length)}...',
+                                    style: AppTextStyles.caption.copyWith(fontSize: 11, color: AppColors.goldBright),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.copy, size: 13, color: AppColors.goldBright),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        Text('@${profile.username}', style: AppTextStyles.caption),
+                        const SizedBox(height: 12),
+                        const GoldDivider(),
+                        const SizedBox(height: 18),
+                        _currencyRow(profile),
+                        const SizedBox(height: 16),
+                        _statsRow(profile),
+                        const SizedBox(height: 24),
+                        const SectionHeader(title: 'ئاستی پێشکەوتن'),
+                        const SizedBox(height: 10),
+                        _levelCard(profile),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _currencyRow(ProfileState profile) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        CurrencyPill(icon: KurdishIcons.coin, value: '${profile.coins} زێڕ'),
+        const SizedBox(width: 14),
+        CurrencyPill(icon: KurdishIcons.gem, value: '${profile.gems} یاقووت', color: AppColors.sapphire),
+        const SizedBox(width: 14),
+        CurrencyPill(icon: Icons.local_fire_department, value: '${profile.streak} ڕۆژ', color: AppColors.ruby),
+      ],
     );
   }
 

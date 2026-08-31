@@ -67,6 +67,29 @@ router.post('/me/achievements', authMiddleware, async (req, res) => {
   }
 });
 
+router.post('/me/avatar', authMiddleware, async (req, res) => {
+  try {
+    const { imageBase64, mimeType } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'وێنەیەک بنێرە.' });
+    }
+    const { saveAvatar } = require('../services/storage');
+    const result = await saveAvatar(imageBase64, mimeType || 'image/png', req.userId);
+    
+    await run('UPDATE users SET avatar_url = $1, updated_at = $2 WHERE id = $3',
+      [result.url, Math.floor(Date.now() / 1000), req.userId]);
+    
+    const user = await queryOne('SELECT * FROM users WHERE id = $1', [req.userId]);
+    res.json({
+      avatarUrl: result.url,
+      user: formatUser(user),
+    });
+  } catch (err) {
+    console.error('Avatar upload error:', err);
+    res.status(400).json({ error: err.message || 'هەڵە لە بارکردنی وێنە.' });
+  }
+});
+
 function formatUser(u) {
   if (!u) return null;
   return { id: u.id, username: u.username, displayName: u.display_name, avatarUrl: u.avatar_url, coins: u.coins, gems: u.gems, xp: u.xp, level: u.level, wins: u.wins, gamesPlayed: u.games_played, streak: u.streak, createdAt: u.created_at };

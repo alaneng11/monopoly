@@ -1,23 +1,76 @@
 import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
 
-class ShopScreen extends StatefulWidget {
+import '../../data/online/online_repository.dart';
+import '../../presentation/providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+class ShopScreen extends ConsumerStatefulWidget {
   const ShopScreen({super.key});
 
   @override
-  State<ShopScreen> createState() => _ShopScreenState();
+  ConsumerState<ShopScreen> createState() => _ShopScreenState();
 }
 
-class _ShopScreenState extends State<ShopScreen> {
+class _ShopScreenState extends ConsumerState<ShopScreen> {
   int _tab = 0;
-  final tabs = const ['دراو', 'ستایل', 'پارچە یاری'];
+  final tabs = const ['دراو', 'بەرد', 'چوارچێوە', 'ڕووکار'];
+  List<CosmeticItem> _catalog = [];
+  List<CosmeticItem> _inventory = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShopData();
+  }
+
+  Future<void> _loadShopData() async {
+    try {
+      final items = await ShopRepository.instance.getCatalog();
+      final inv = await ShopRepository.instance.getInventory();
+      if (mounted) {
+        setState(() {
+          _catalog = items;
+          _inventory = inv;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _buyOrEquip(CosmeticItem item) async {
+    final isOwned = _inventory.any((i) => i.id == item.id);
+    if (isOwned) {
+      final ok = await ShopRepository.instance.equipItem(item.id);
+      if (ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} بەکارخرا! ✨')));
+        _loadShopData();
+      }
+    } else {
+      final currency = item.gemPrice > 0 ? 'gems' : 'coins';
+      final ok = await ShopRepository.instance.buyItem(item.id, currency: currency);
+      if (ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} بە سەرکەوتوویی کڕدرا! 🎉')));
+        _loadShopData();
+        ref.read(profileProvider.notifier).refresh();
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('دراوی پێویستت نییە بۆ کڕین!')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final profile = ref.watch(profileProvider).value;
+    final coins = profile?.coins ?? 0;
+    final gems = profile?.gems ?? 0;
+
     return Scaffold(
       body: LuxuryBackground(
         child: SafeArea(
@@ -29,9 +82,11 @@ class _ShopScreenState extends State<ShopScreen> {
                   children: [
                     CircleIconButton(icon: Icons.arrow_forward, onTap: () => Navigator.pop(context)),
                     const SizedBox(width: 12),
-                    Text('بازاڕ', style: AppTextStyles.h2),
+                    Text('بازاڕی هەولێر', style: AppTextStyles.h2),
                     const Spacer(),
-                    const CurrencyPill(icon: KurdishIcons.gem, value: '86', color: AppColors.sapphire),
+                    CurrencyPill(icon: KurdishIcons.coin, value: '$coins', color: AppColors.gold),
+                    const SizedBox(width: 8),
+                    CurrencyPill(icon: KurdishIcons.gem, value: '$gems', color: AppColors.sapphire),
                   ],
                 ),
               ),
@@ -42,10 +97,12 @@ class _ShopScreenState extends State<ShopScreen> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                  child: ResponsiveCenter(child: _tab == 0 ? _coinPacks() : _itemGrid()),
-                ),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator(color: AppColors.gold))
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        child: ResponsiveCenter(child: _tab == 0 ? _coinPacks() : _itemGrid()),
+                      ),
               ),
             ],
           ),
@@ -89,10 +146,10 @@ class _ShopScreenState extends State<ShopScreen> {
 
   Widget _coinPacks() {
     final packs = [
-      (1000, '٩٩٩ د', false),
-      (5500, '٤٬٩٩٩ د', true),
-      (12000, '٩٬٩٩٩ د', false),
-      (30000, '١٩٬٩٩٩ د', false),
+      (1000, '٩٩٩ د.ع', false),
+      (5500, '٤٬٩٩٩ د.ع', true),
+      (12000, '٩٬٩٩٩ د.ع', false),
+      (30000, '١٩٬٩٩٩ د.ع', false),
     ];
     return Column(
       children: packs
@@ -120,11 +177,11 @@ class _ShopScreenState extends State<ShopScreen> {
           Container(
             width: 52,
             height: 52,
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               gradient: AppColors.goldGradient,
               shape: BoxShape.circle,
             ),
-            child: Icon(KurdishIcons.coin, color: AppColors.night, size: 24),
+            child: const Icon(KurdishIcons.coin, color: AppColors.night, size: 24),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -147,7 +204,7 @@ class _ShopScreenState extends State<ShopScreen> {
                     ],
                   ],
                 ),
-                Text('پاکێجی زێڕ', style: AppTextStyles.caption),
+                Text('پاکێجی زێڕی هەولێر', style: AppTextStyles.caption),
               ],
             ),
           ),
@@ -158,52 +215,70 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 
   Widget _itemGrid() {
-    final icons = [
-      FontAwesomeIcons.hatCowboy,
-      FontAwesomeIcons.crown,
-      FontAwesomeIcons.chessKnight,
-      FontAwesomeIcons.paintbrush,
-      FontAwesomeIcons.gem,
-      FontAwesomeIcons.wandMagicSparkles,
-    ];
+    final cat = _tab == 1 ? 'dice' : (_tab == 2 ? 'frame' : 'theme');
+    final items = _catalog.where((i) => i.category == cat).toList();
+
+    if (items.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(40),
+          child: Text('هیچ کاڵایەک بەردەست نییە لەم بەشەدا.', style: AppTextStyles.bodySoft),
+        ),
+      );
+    }
+
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      itemCount: icons.length,
+      itemCount: items.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         mainAxisSpacing: 14,
         crossAxisSpacing: 14,
-        childAspectRatio: 0.85,
+        childAspectRatio: 0.82,
       ),
-      itemBuilder: (context, i) => FadeInUp(
-        delay: Duration(milliseconds: 50 * i),
-        child: GlassContainer(
-          borderRadius: 20,
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            children: [
-              Expanded(
-                child: Center(
-                  child: Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: AppColors.propertyGroups[i % 8].withValues(alpha: 0.2),
-                      shape: BoxShape.circle,
+      itemBuilder: (context, i) {
+        final item = items[i];
+        final isOwned = _inventory.any((inv) => inv.id == item.id);
+        final isEquipped = _inventory.any((inv) => inv.id == item.id && inv.isEquipped);
+
+        return FadeInUp(
+          delay: Duration(milliseconds: 50 * i),
+          child: GlassContainer(
+            borderRadius: 20,
+            padding: const EdgeInsets.all(14),
+            borderColor: isEquipped ? AppColors.gold : AppColors.glassBorder,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        color: AppColors.gold.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(item.icon, style: const TextStyle(fontSize: 26)),
+                      ),
                     ),
-                    child: Icon(icons[i], color: AppColors.propertyGroups[i % 8], size: 26),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text('پێکهاتەی ${i + 1}', style: AppTextStyles.caption),
-              const SizedBox(height: 8),
-              GoldenButton(label: '${(i + 1) * 40} 💎', height: 34, fontSize: 11, onTap: () {}),
-            ],
+                const SizedBox(height: 6),
+                Text(item.name, style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+                const SizedBox(height: 8),
+                GoldenButton(
+                  label: isEquipped ? 'بەکارخراوە ✓' : (isOwned ? 'بەکارخستن' : (item.gemPrice > 0 ? '${item.gemPrice} 💎' : '${item.coinPrice} 🪙')),
+                  height: 34,
+                  fontSize: 11,
+                  onTap: isEquipped ? null : () => _buyOrEquip(item),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

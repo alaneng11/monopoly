@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS player_profiles (
   bio TEXT DEFAULT '',
   selected_avatar TEXT DEFAULT 'business',
   selected_title TEXT DEFAULT '',
-  cosmetics TEXT DEFAULT '{}',
-  stats TEXT DEFAULT '{}'
+  cosmetics JSONB DEFAULT '{}',
+  stats JSONB DEFAULT '{}'
 );
 
 -- 3. GAME ROOMS
@@ -74,8 +74,8 @@ CREATE TABLE IF NOT EXISTS game_states (
   current_player_index INTEGER NOT NULL DEFAULT 0,
   phase TEXT NOT NULL DEFAULT 'awaitingRoll',
   dice TEXT NOT NULL DEFAULT '[1,1]',
-  players TEXT NOT NULL DEFAULT '[]',
-  tiles TEXT NOT NULL DEFAULT '{}',
+  players JSONB NOT NULL DEFAULT '[]',
+  tiles JSONB NOT NULL DEFAULT '{}',
   free_coins INTEGER NOT NULL DEFAULT 0,
   winner_id TEXT DEFAULT '',
   seed INTEGER NOT NULL DEFAULT 0,
@@ -84,17 +84,18 @@ CREATE TABLE IF NOT EXISTS game_states (
   max_dice_energy INTEGER NOT NULL DEFAULT 10,
   energy_regen_rate INTEGER NOT NULL DEFAULT 1,
   turn_token INTEGER NOT NULL DEFAULT 0,
-  active_event TEXT,
-  pending_trade TEXT,
-  auction TEXT,
+  active_event JSONB,
+  pending_trade JSONB,
+  auction JSONB,
   state_version INTEGER NOT NULL DEFAULT 1,
+  turn_started_at BIGINT,
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
   updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
 
 -- 6. PROPERTIES
 CREATE TABLE IF NOT EXISTS properties (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT NOT NULL REFERENCES game_rooms(code) ON DELETE CASCADE,
   tile_index INTEGER NOT NULL,
   owner_id TEXT REFERENCES users(id),
@@ -105,13 +106,13 @@ CREATE TABLE IF NOT EXISTS properties (
 
 -- 7. TRANSACTIONS
 CREATE TABLE IF NOT EXISTS transactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT,
   from_id TEXT NOT NULL,
   to_id TEXT NOT NULL,
   amount INTEGER NOT NULL,
   reason TEXT NOT NULL DEFAULT '',
-  metadata TEXT DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
 CREATE INDEX IF NOT EXISTS idx_tx_room ON transactions(room_code, created_at);
@@ -120,16 +121,16 @@ CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_id, created_at);
 
 -- 8. TRADES
 CREATE TABLE IF NOT EXISTS trades (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT NOT NULL,
   from_user TEXT NOT NULL REFERENCES users(id),
   to_user TEXT NOT NULL REFERENCES users(id),
   money_from INTEGER NOT NULL DEFAULT 0,
   money_to INTEGER NOT NULL DEFAULT 0,
-  tiles_from TEXT DEFAULT '[]',
-  tiles_to TEXT DEFAULT '[]',
-  cards_from TEXT DEFAULT '[]',
-  cards_to TEXT DEFAULT '[]',
+  tiles_from JSONB DEFAULT '[]',
+  tiles_to JSONB DEFAULT '[]',
+  cards_from JSONB DEFAULT '[]',
+  cards_to JSONB DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',
   accepted_by_from INTEGER NOT NULL DEFAULT 0,
   accepted_by_to INTEGER NOT NULL DEFAULT 0,
@@ -139,7 +140,7 @@ CREATE TABLE IF NOT EXISTS trades (
 
 -- 9. AUCTIONS
 CREATE TABLE IF NOT EXISTS auctions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT NOT NULL,
   tile_index INTEGER NOT NULL,
   highest_bid INTEGER NOT NULL DEFAULT 0,
@@ -151,7 +152,7 @@ CREATE TABLE IF NOT EXISTS auctions (
 );
 
 CREATE TABLE IF NOT EXISTS auction_bids (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   auction_id INTEGER NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
   bidder_id TEXT NOT NULL REFERENCES users(id),
   amount INTEGER NOT NULL,
@@ -243,7 +244,7 @@ CREATE TABLE IF NOT EXISTS user_missions (
 
 -- 15. DAILY REWARDS
 CREATE TABLE IF NOT EXISTS daily_rewards (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   day_number INTEGER NOT NULL,
   coin_reward INTEGER NOT NULL DEFAULT 100,
   gem_reward INTEGER NOT NULL DEFAULT 0,
@@ -280,16 +281,16 @@ CREATE TABLE IF NOT EXISTS user_collectibles (
 
 -- 17. MATCH HISTORY
 CREATE TABLE IF NOT EXISTS match_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT NOT NULL,
   winner_id TEXT REFERENCES users(id),
   winner_name TEXT NOT NULL DEFAULT '',
-  player_ids TEXT NOT NULL DEFAULT '[]',
-  player_names TEXT NOT NULL DEFAULT '[]',
+  player_ids JSONB NOT NULL DEFAULT '[]',
+  player_names JSONB NOT NULL DEFAULT '[]',
   round INTEGER NOT NULL DEFAULT 0,
   duration_seconds INTEGER NOT NULL DEFAULT 0,
   final_net_worth INTEGER NOT NULL DEFAULT 0,
-  stats TEXT DEFAULT '{}',
+  stats JSONB DEFAULT '{}',
   played_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
 CREATE INDEX IF NOT EXISTS idx_match_winner ON match_history(winner_id);
@@ -326,12 +327,12 @@ CREATE TABLE IF NOT EXISTS player_statistics (
 
 -- 20. NOTIFICATIONS
 CREATE TABLE IF NOT EXISTS notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
-  data TEXT DEFAULT '{}',
+  data JSONB DEFAULT '{}',
   read INTEGER NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
@@ -339,7 +340,7 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read, create
 
 -- 21. GAME EVENTS
 CREATE TABLE IF NOT EXISTS game_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   room_code TEXT NOT NULL,
   event_type TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -360,6 +361,73 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
 CREATE INDEX IF NOT EXISTS idx_session_user ON user_sessions(user_id);
+
+-- 23. SEASONS
+CREATE TABLE IF NOT EXISTS seasons (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  start_date BIGINT NOT NULL,
+  end_date BIGINT NOT NULL,
+  max_tier INTEGER NOT NULL DEFAULT 30,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
+);
+
+CREATE TABLE IF NOT EXISTS user_seasons (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  season_id TEXT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+  current_tier INTEGER NOT NULL DEFAULT 1,
+  season_xp INTEGER NOT NULL DEFAULT 0,
+  claimed_tiers JSONB DEFAULT '[]',
+  updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (user_id, season_id)
+);
+
+-- 24. COSMETICS & INVENTORY
+CREATE TABLE IF NOT EXISTS cosmetics (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL,
+  rarity TEXT NOT NULL DEFAULT 'common',
+  coin_price INTEGER NOT NULL DEFAULT 0,
+  gem_price INTEGER NOT NULL DEFAULT 0,
+  icon TEXT DEFAULT '',
+  preview_asset TEXT DEFAULT '',
+  is_for_sale INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS user_cosmetics (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cosmetic_id TEXT NOT NULL REFERENCES cosmetics(id) ON DELETE CASCADE,
+  is_equipped INTEGER NOT NULL DEFAULT 0,
+  acquired_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (user_id, cosmetic_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_cosmetics ON user_cosmetics(user_id, is_equipped);
+
+-- 25. BANK LOANS
+CREATE TABLE IF NOT EXISTS bank_loans (
+  id SERIAL PRIMARY KEY,
+  room_code TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  principal INTEGER NOT NULL,
+  interest_rate REAL NOT NULL DEFAULT 0.10,
+  amount_due INTEGER NOT NULL,
+  due_round INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
+);
+
+-- 26. SPECTATORS
+CREATE TABLE IF NOT EXISTS spectators (
+  room_code TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  joined_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (room_code, user_id)
+);
 `;
 
 // SQLite-specific adaptations
@@ -496,6 +564,41 @@ async function autoSetup() {
       } catch (_) {}
     }
     console.log('✅ Collectibles seeded');
+  }
+
+  // Seed seasons if empty
+  const sCount = await queryOne('SELECT COUNT(*) as c FROM seasons').catch(() => null);
+  if (sCount && parseInt(sCount.c) === 0) {
+    console.log('🌱 Seeding seasons...');
+    const now = Math.floor(Date.now() / 1000);
+    const end = now + (90 * 86400); // 90 days
+    try {
+      await run('INSERT INTO seasons (id, name, description, start_date, end_date, max_tier, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        ['season_1', 'وەرزی ١: ڕۆژانی قەڵا', 'یەکەم وەرزی مۆنۆپۆلی هەولێر بە خەڵاتی تایبەت', now, end, 30, 1]);
+    } catch (_) {}
+    console.log('✅ Seasons seeded');
+  }
+
+  // Seed cosmetics if empty
+  const cosCount = await queryOne('SELECT COUNT(*) as c FROM cosmetics').catch(() => null);
+  if (cosCount && parseInt(cosCount.c) === 0) {
+    console.log('🌱 Seeding cosmetics catalog...');
+    const cosmetics = [
+      ['dice_gold', 'بەردی زێڕین', 'دیزاینی زێڕینی شاهانە', 'dice', 'epic', 1000, 20, '🎲', 'gold_dice', 1, 1],
+      ['dice_citadel', 'بەردی قەڵا', 'بەردی نەخشی مێژوویی قەڵا', 'dice', 'rare', 500, 10, '🏰', 'citadel_dice', 1, 2],
+      ['dice_neon', 'بەردی نیۆن', 'دیزاینی ڕووناکی شەوانە', 'dice', 'legendary', 2500, 50, '✨', 'neon_dice', 1, 3],
+      ['frame_gold', 'چوارچێوەی زێڕ', 'چوارچێوەی زێڕینی ئاست بەرز', 'frame', 'rare', 600, 15, '🖼️', 'gold_frame', 1, 4],
+      ['frame_citadel', 'چوارچێوەی قەڵا', 'چوارچێوەی مێژوویی', 'frame', 'epic', 1200, 25, '🏰', 'citadel_frame', 1, 5],
+      ['theme_classic', 'کلاسیکی هەولێر', 'دیزاینی ڕەسەن و گەرم', 'theme', 'common', 0, 0, '🎨', 'classic_theme', 1, 6],
+      ['theme_night', 'هەولێری شەوانە', 'شاری هەولێر بە ڕووناکی شەو', 'theme', 'epic', 2000, 40, '🌙', 'night_theme', 1, 7],
+    ];
+    for (const [id, name, desc, cat, rarity, coins, gems, icon, preview, forSale, sortOrder] of cosmetics) {
+      try {
+        await run('INSERT INTO cosmetics (id, name, description, category, rarity, coin_price, gem_price, icon, preview_asset, is_for_sale, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+          [id, name, desc, cat, rarity, coins, gems, icon, preview, forSale, sortOrder]);
+      } catch (_) {}
+    }
+    console.log('✅ Cosmetics seeded');
   }
 
   // Save SQLite to disk

@@ -5,10 +5,10 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/widgets/widgets.dart';
-import '../../../domain/models/chat_models.dart';
 import '../../../data/online/chat_repository.dart';
+import '../../../domain/models/chat_models.dart';
 
-/// پانێڵی گفتوگۆی ناو یاری — نامە و ئێمۆژی لەگەڵ هاوبەشکردنی کۆی.
+/// پانێڵی گفتوگۆی ناو یاری — نامە و ئێمۆژی لەگەڵ هاوبەشکردنی ڕاستەوخۆ لە ڕێگەی سێرڤەر.
 class GameChatPanel extends StatefulWidget {
   final String gameRoomId;
   final String myId;
@@ -33,7 +33,12 @@ class _GameChatPanelState extends State<GameChatPanel> {
   StreamSubscription<List<GameChatMessage>>? _sub;
   List<GameChatMessage> _messages = [];
 
-  static const _quickEmojis = ['👏', '😂', '🔥', '❤️', '😱', '😡', '🎉', '👍', '👎', '😮', '💀', '🏆'];
+  static const _quickReactions = ['❤️', '😂', '🔥', '👏', '😱', '😡', '🎉', '👍'];
+  static const _allEmojis = [
+    '❤️', '😂', '🔥', '👏', '😱', '😡', '🎉', '👍',
+    '👎', '😮', '💀', '🏆', '💰', '🎲', '🏰', '✨',
+    '🤝', '😎', '🥳', '🤔', '💪', '⭐', '🥇', '👑',
+  ];
 
   @override
   void initState() {
@@ -78,25 +83,32 @@ class _GameChatPanelState extends State<GameChatPanel> {
     setState(() => _showEmoji = false);
   }
 
+  void _sendReaction(String emoji) {
+    _repo.sendQuickReaction(widget.gameRoomId, emoji);
+    _sendEmoji(emoji);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.55,
-      decoration: BoxDecoration(
-        gradient: AppColors.royalBackground,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(color: AppColors.gold.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        children: [
-          // هێستەر
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        height: MediaQuery.of(context).size.height * 0.65,
+        decoration: BoxDecoration(
+          gradient: AppColors.royalBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          border: Border.all(color: AppColors.gold.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          children: [
+          // Drag Handle
           Container(
             width: 44,
             height: 4,
             margin: const EdgeInsets.only(top: 10),
             decoration: BoxDecoration(color: AppColors.glassBorder, borderRadius: BorderRadius.circular(4)),
           ),
-          // سەرناو
+          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
             child: Row(
@@ -104,13 +116,53 @@ class _GameChatPanelState extends State<GameChatPanel> {
                 const Icon(Icons.chat_bubble_outline, color: AppColors.gold, size: 22),
                 const SizedBox(width: 8),
                 Text('گفتوگۆی یاری', style: AppTextStyles.h3),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.gold.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3)),
+                  ),
+                  child: Text(
+                    widget.gameRoomId,
+                    style: AppTextStyles.caption.copyWith(color: AppColors.goldBright, fontWeight: FontWeight.bold),
+                  ),
+                ),
                 const Spacer(),
                 CircleIconButton(icon: Icons.close, size: 34, onTap: () => Navigator.pop(context)),
               ],
             ),
           ),
+          const SizedBox(height: 6),
+          // Quick Reaction Bar
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _quickReactions.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                final emoji = _quickReactions[i];
+                return GestureDetector(
+                  onTap: () => _sendReaction(emoji),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.glassBorder),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(emoji, style: const TextStyle(fontSize: 20)),
+                  ),
+                );
+              },
+            ),
+          ),
           Divider(color: AppColors.glassBorder, height: 1),
-          // لیستی نامەکان
+          // Messages List
           Expanded(
             child: _messages.isEmpty
                 ? Center(
@@ -132,36 +184,36 @@ class _GameChatPanelState extends State<GameChatPanel> {
                     itemBuilder: (context, i) => _messageBubble(_messages[i]),
                   ),
           ),
-          // ئێمۆژی سیکر
+          // Emoji Picker Grid
           if (_showEmoji)
             Container(
-              height: 100,
+              height: 140,
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
-                color: AppColors.night2.withValues(alpha: 0.9),
+                color: AppColors.night2.withValues(alpha: 0.95),
                 border: Border(top: BorderSide(color: AppColors.glassBorder)),
               ),
               child: GridView.builder(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 6,
-                  mainAxisSpacing: 4,
-                  crossAxisSpacing: 4,
+                  crossAxisCount: 8,
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
                 ),
-                itemCount: _quickEmojis.length,
+                itemCount: _allEmojis.length,
                 itemBuilder: (context, i) => GestureDetector(
-                  onTap: () => _sendEmoji(_quickEmojis[i]),
+                  onTap: () => _sendEmoji(_allEmojis[i]),
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     alignment: Alignment.center,
-                    child: Text(_quickEmojis[i], style: const TextStyle(fontSize: 22)),
+                    child: Text(_allEmojis[i], style: const TextStyle(fontSize: 22)),
                   ),
                 ),
               ),
             ),
-          // ناوەڕۆکی ناردن
+          // Input Bar
           Container(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             decoration: BoxDecoration(
@@ -195,7 +247,7 @@ class _GameChatPanelState extends State<GameChatPanel> {
                     child: TextField(
                       controller: _controller,
                       style: AppTextStyles.body,
-                      maxLength: 200,
+                      maxLength: 500,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _sendText(),
                       decoration: InputDecoration(
@@ -227,11 +279,12 @@ class _GameChatPanelState extends State<GameChatPanel> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _messageBubble(GameChatMessage msg) {
-    final isMe = msg.senderId == widget.myId;
+    final isMe = msg.senderId == widget.myId || (widget.myId.isEmpty && msg.senderName == widget.myName);
     final time = DateTime.fromMillisecondsSinceEpoch(msg.timestamp);
     final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 
@@ -242,13 +295,13 @@ class _GameChatPanelState extends State<GameChatPanel> {
           mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
           children: [
             if (!isMe) ...[
-              Text(msg.senderName, style: AppTextStyles.caption.copyWith(fontSize: 9)),
+              Text(msg.senderName, style: AppTextStyles.caption.copyWith(fontSize: 10, color: AppColors.gold)),
               const SizedBox(width: 6),
             ],
-            Text(msg.emoji!, style: const TextStyle(fontSize: 36)),
+            Text(msg.emoji!, style: const TextStyle(fontSize: 34)),
             if (isMe) ...[
               const SizedBox(width: 6),
-              Text(msg.senderName, style: AppTextStyles.caption.copyWith(fontSize: 9)),
+              Text(timeStr, style: AppTextStyles.caption.copyWith(fontSize: 8)),
             ],
           ],
         ),

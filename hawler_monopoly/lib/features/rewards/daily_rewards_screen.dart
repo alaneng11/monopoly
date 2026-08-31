@@ -4,6 +4,8 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
 import '../../data/local/persistence.dart';
+import '../../data/online/api_client.dart';
+import '../../data/online/online_repository.dart';
 import '../../presentation/providers.dart';
 
 /// شاشەی خەڵاتی ڕۆژانە — لۆژیکی ڕاستەقینەی پاشەکەوت و وەرگرتن.
@@ -28,6 +30,24 @@ class _DailyRewardsScreenState extends ConsumerState<DailyRewardsScreen> {
   }
 
   Future<void> _load() async {
+    if (ApiClient.instance.token != null) {
+      try {
+        final rewards = await RewardsRepository.instance.getDailyRewards();
+        if (rewards.isNotEmpty) {
+          final claimedCount = rewards.where((r) => r.isClaimed).length;
+          final todayClaimed = rewards.any((r) => r.isClaimed && r.dayNumber == (claimedCount == 0 ? 1 : claimedCount));
+          if (mounted) {
+            setState(() {
+              _daily = {'day': claimedCount, 'lastClaim': todayClaimed ? _todayKey() : ''};
+              _claimedToday = todayClaimed;
+              _loading = false;
+            });
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+
     final d = await LocalPersistence.loadDailyReward();
     final today = _todayKey();
     final claimed = d['lastClaim'] == today;
@@ -49,9 +69,14 @@ class _DailyRewardsScreenState extends ConsumerState<DailyRewardsScreen> {
     final today = _todayKey();
     final yesterday = _todayKeyOf(DateTime.now().subtract(const Duration(days: 1)));
     var day = (_daily['day'] as int? ?? 0);
-    // ئەگەر دوێنێ نەبووبێت، زنجیرەکە دەستپێدەکرێتەوە
     day = _daily['lastClaim'] == yesterday ? (day % 7) + 1 : 1;
     final reward = _rewards[day - 1];
+
+    if (ApiClient.instance.token != null) {
+      try {
+        await RewardsRepository.instance.claimDailyReward(day);
+      } catch (_) {}
+    }
 
     await LocalPersistence.saveDailyReward({'lastClaim': today, 'day': day});
     await ref.read(profileProvider.notifier).addCoins(reward);

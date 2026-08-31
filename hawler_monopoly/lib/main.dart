@@ -12,6 +12,8 @@ import 'features/inventory/inventory_screen.dart';
 import 'features/leaderboard/leaderboard_screen.dart';
 import 'features/lobby/lobby_screen.dart';
 import 'features/lobby/local_setup_screen.dart';
+import 'features/lobby/online_lobby_screen.dart';
+import 'features/lobby/room_screen.dart';
 import 'features/profile/profile_screen.dart';
 import 'features/rewards/daily_rewards_screen.dart';
 import 'features/rewards/challenges_screen.dart';
@@ -22,7 +24,19 @@ import 'features/settings/settings_screen.dart';
 import 'features/shop/shop_screen.dart';
 import 'features/splash/splash_screen.dart';
 
-void main() {
+import 'core/services/sound_service.dart';
+import 'data/local/persistence.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Load settings and configure SoundService on startup
+  try {
+    final settings = await LocalPersistence.loadSettings();
+    SoundService.instance.configure(
+      sound: settings['sound'] as bool? ?? true,
+      vibration: settings['vibration'] as bool? ?? true,
+    );
+  } catch (_) {}
   runApp(const ProviderScope(child: HawlerMonopolyApp()));
 }
 
@@ -33,6 +47,11 @@ final _router = GoRouter(
     GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
     GoRoute(path: '/home', builder: (_, __) => const HomeScreen()),
     GoRoute(path: '/lobby', builder: (_, __) => const LobbyScreen()),
+    GoRoute(path: '/online-lobby', builder: (_, __) => const OnlineLobbyScreen()),
+    GoRoute(
+      path: '/room/:code',
+      builder: (_, state) => RoomScreen(roomCode: state.pathParameters['code'] ?? ''),
+    ),
     GoRoute(path: '/local-setup', builder: (_, __) => const LocalSetupScreen()),
     GoRoute(path: '/game', builder: (_, __) => const BoardScreen()),
     GoRoute(path: '/profile', builder: (_, __) => const ProfileScreen()),

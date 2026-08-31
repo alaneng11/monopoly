@@ -23,13 +23,13 @@ class PlayerInfoBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: SizedBox(
-        height: 74,
+        height: 58,
         child: ListView.separated(
           scrollDirection: Axis.horizontal,
           itemCount: players.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 10),
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
           itemBuilder: (context, i) => _PlayerChip(
             player: players[i],
             isActive: players[i].id == activePlayerId,
@@ -55,11 +55,11 @@ class _PlayerChip extends StatelessWidget {
       child: Opacity(
         opacity: player.bankrupt ? 0.4 : 1,
         child: GlassContainer(
-          borderRadius: 18,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          borderRadius: 16,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           borderColor: isActive ? AppColors.gold : AppColors.glassBorder,
-          borderWidth: isActive ? 1.8 : 1,
-          shadows: isActive ? AppColors.goldGlow(blur: 14) : AppColors.softShadow(),
+          borderWidth: isActive ? 1.5 : 1,
+          shadows: isActive ? AppColors.goldGlow(blur: 10) : AppColors.softShadow(),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

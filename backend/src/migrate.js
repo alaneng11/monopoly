@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS game_states (
   pending_trade JSONB,
   auction JSONB,
   state_version INTEGER NOT NULL DEFAULT 1,
+  turn_started_at BIGINT,
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
   updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
@@ -406,6 +407,81 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
 );
 CREATE INDEX IF NOT EXISTS idx_session_user ON user_sessions(user_id);
+
+-- ════════════════════════════════════════════════════════════
+-- 23. SEASONS (Battle pass / seasonal progression)
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS seasons (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  start_date BIGINT NOT NULL,
+  end_date BIGINT NOT NULL,
+  max_tier INTEGER NOT NULL DEFAULT 30,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
+);
+
+CREATE TABLE IF NOT EXISTS user_seasons (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  season_id TEXT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+  current_tier INTEGER NOT NULL DEFAULT 1,
+  season_xp INTEGER NOT NULL DEFAULT 0,
+  claimed_tiers JSONB DEFAULT '[]',
+  updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (user_id, season_id)
+);
+
+-- ════════════════════════════════════════════════════════════
+-- 24. COSMETICS & USER INVENTORY
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS cosmetics (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL, -- 'dice', 'avatar', 'frame', 'theme', 'effect'
+  rarity TEXT NOT NULL DEFAULT 'common', -- 'common', 'rare', 'epic', 'legendary'
+  coin_price INTEGER NOT NULL DEFAULT 0,
+  gem_price INTEGER NOT NULL DEFAULT 0,
+  icon TEXT DEFAULT '',
+  preview_asset TEXT DEFAULT '',
+  is_for_sale INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS user_cosmetics (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cosmetic_id TEXT NOT NULL REFERENCES cosmetics(id) ON DELETE CASCADE,
+  is_equipped INTEGER NOT NULL DEFAULT 0,
+  acquired_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (user_id, cosmetic_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_cosmetics ON user_cosmetics(user_id, is_equipped);
+
+-- ════════════════════════════════════════════════════════════
+-- 25. BANK LOANS & COLLATERAL
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS bank_loans (
+  id SERIAL PRIMARY KEY,
+  room_code TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  principal INTEGER NOT NULL,
+  interest_rate REAL NOT NULL DEFAULT 0.10,
+  amount_due INTEGER NOT NULL,
+  due_round INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active', -- 'active', 'repaid', 'defaulted'
+  created_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint)
+);
+
+-- ════════════════════════════════════════════════════════════
+-- 26. SPECTATORS (Live game watch)
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS spectators (
+  room_code TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  joined_at BIGINT NOT NULL DEFAULT (extract(epoch from now())::bigint),
+  PRIMARY KEY (room_code, user_id)
+);
 `;
 
 // SQLite-specific: adapt PostgreSQL syntax

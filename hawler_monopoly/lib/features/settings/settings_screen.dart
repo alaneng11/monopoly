@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/services/sound_service.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
 import '../../presentation/providers.dart';
 
-/// ڕێکخستنەکان — پاشەکەوتی ڕاستەقینە لە SharedPreferences.
+/// ڕێکخستنەکان — پاشەکەوتی ڕاستەقینە لە SharedPreferences + ئەنجامدانی کاریگەری ڕاستەقینە.
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -52,14 +53,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 6),
                         child: Column(
                           children: [
-                            _switchTile('دەنگی یاری', Icons.volume_up, settings.sound, (v) => controller.set('sound', v)),
+                            _switchTile('دەنگی یاری', Icons.volume_up, settings.sound, (v) {
+                              controller.set('sound', v);
+                              // Apply immediately to SoundService
+                              SoundService.instance.configure(sound: v);
+                            }),
                             _divider(),
-                            _switchTile('میوزیک', Icons.music_note, settings.music, (v) => controller.set('music', v)),
+                            _switchTile('میوزیک', Icons.music_note, settings.music, (v) {
+                              controller.set('music', v);
+                            }),
                             _divider(),
                             _switchTile('ئاگادارکردنەوە', Icons.notifications, settings.notifications,
                                 (v) => controller.set('notifications', v)),
                             _divider(),
-                            _switchTile('لەرین', Icons.vibration, settings.vibration, (v) => controller.set('vibration', v)),
+                            _switchTile('لەرین', Icons.vibration, settings.vibration, (v) {
+                              controller.set('vibration', v);
+                              // Apply immediately to SoundService
+                              SoundService.instance.configure(vibration: v);
+                            }),
                           ],
                         ),
                       ),

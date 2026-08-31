@@ -2,15 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/widgets/widgets.dart';
-import '../../../domain/models/chat_models.dart';
+import '../../../data/online/api_client.dart';
 import '../../../data/online/chat_repository.dart';
+import '../../../domain/models/chat_models.dart';
 import '../board/widgets/player_token.dart';
 
-/// شاشەی هاوڕێکان — لیستی هاوڕێکان و چوونە گفتوگۆ.
+/// شاشەی هاوڕێکان — لیستی هاوڕێکان، زیادکردنی هاوڕێ، و گفتوگۆ.
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});
 
@@ -22,13 +22,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
   final _repo = ChatRepository.instance;
   StreamSubscription<List<FriendProfile>>? _sub;
   List<FriendProfile> _friends = [];
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _sub = _repo.watchFriends().listen((f) {
       if (!mounted) return;
-      setState(() => _friends = f);
+      setState(() {
+        _friends = f;
+        _loading = false;
+      });
     });
   }
 
@@ -36,6 +40,55 @@ class _FriendsScreenState extends State<FriendsScreen> {
   void dispose() {
     _sub?.cancel();
     super.dispose();
+  }
+
+  void _showAddFriendDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.night2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: Text('زیادکردنی هاوڕێ', style: AppTextStyles.h3),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('ناسنامەی (ID) هاوڕێکەت بنووسە بۆ ناردنی داواکاری:', style: AppTextStyles.bodySoft),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: AppTextStyles.body,
+              decoration: InputDecoration(
+                hintText: 'ناسنامەی یاریزان (User ID)',
+                hintStyle: AppTextStyles.caption,
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.06),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('داخستن', style: AppTextStyles.caption),
+          ),
+          TextButton(
+            onPressed: () async {
+              final id = controller.text.trim();
+              if (id.isEmpty) return;
+              Navigator.pop(ctx);
+              final res = await _repo.addFriend(id);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(res.ok ? 'داواکاری هاوڕێیەتی نێردرا! 🎉' : (res.error ?? 'هەڵەیەک ڕوویدا'))),
+              );
+            },
+            child: Text('ناردنی داواکاری', style: AppTextStyles.goldLabel),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -53,31 +106,47 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     const SizedBox(width: 12),
                     Text('هاوڕێکان', style: AppTextStyles.h2),
                     const Spacer(),
+                    CircleIconButton(
+                      icon: Icons.person_add,
+                      onTap: _showAddFriendDialog,
+                    ),
+                    const SizedBox(width: 8),
                     Text('${_friends.length} هاوڕێ', style: AppTextStyles.goldLabel),
                   ],
                 ),
               ),
               const SizedBox(height: 14),
               Expanded(
-                child: _friends.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.people_outline, color: AppColors.gold.withValues(alpha: 0.3), size: 50),
-                            const SizedBox(height: 12),
-                            Text('هیچ هاوڕێیەک نییە', style: AppTextStyles.bodySoft),
-                            const SizedBox(height: 8),
-                            Text('هاوڕێ زیاد بکە بۆ گفتوگۆکردن', style: AppTextStyles.caption),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                        itemCount: _friends.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, i) => _friendTile(_friends[i]),
-                      ),
+                child: _loading && _friends.isEmpty
+                    ? const Center(child: CircularProgressIndicator(color: AppColors.gold))
+                    : _friends.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.people_outline, color: AppColors.gold.withValues(alpha: 0.3), size: 50),
+                                const SizedBox(height: 12),
+                                Text('هیچ هاوڕێیەک نییە', style: AppTextStyles.bodySoft),
+                                const SizedBox(height: 8),
+                                Text('هاوڕێ زیاد بکە بۆ گفتوگۆکردن', style: AppTextStyles.caption),
+                                const SizedBox(height: 16),
+                                GoldenButton(
+                                  label: 'زیادکردنی هاوڕێ',
+                                  icon: Icons.person_add,
+                                  width: 170,
+                                  height: 42,
+                                  fontSize: 13,
+                                  onTap: _showAddFriendDialog,
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                            itemCount: _friends.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, i) => _friendTile(_friends[i]),
+                          ),
               ),
             ],
           ),
@@ -176,7 +245,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
   StreamSubscription<List<FriendMessage>>? _sub;
   List<FriendMessage> _messages = [];
 
-  static const _quickEmojis = ['👏', '😂', '🔥', '❤️', '😱', '😡', '🎉', '👍', '👎', '😮', '💀', '🏆'];
+  static const _quickEmojis = ['👏', '😂', '🔥', '❤️', '😱', '😡', '🎉', '👍', '👎', '😮', '💀', '🏆', '💰', '🎲', '✨', '🤝'];
 
   @override
   void initState() {
@@ -229,7 +298,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
         child: SafeArea(
           child: Column(
             children: [
-              // سەرناو
+              // Header
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Row(
@@ -259,7 +328,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                 ),
               ),
               Divider(color: AppColors.glassBorder, height: 1),
-              // نامەکان
+              // Messages
               Expanded(
                 child: _messages.isEmpty
                     ? Center(
@@ -281,18 +350,18 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                         itemBuilder: (context, i) => _messageBubble(_messages[i]),
                       ),
               ),
-              // ئێمۆژی
+              // Emoji Selector
               if (_showEmoji)
                 Container(
-                  height: 100,
+                  height: 110,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   decoration: BoxDecoration(
-                    color: AppColors.night2.withValues(alpha: 0.9),
+                    color: AppColors.night2.withValues(alpha: 0.95),
                     border: Border(top: BorderSide(color: AppColors.glassBorder)),
                   ),
                   child: GridView.builder(
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 6, mainAxisSpacing: 4, crossAxisSpacing: 4,
+                      crossAxisCount: 8, mainAxisSpacing: 4, crossAxisSpacing: 4,
                     ),
                     itemCount: _quickEmojis.length,
                     itemBuilder: (context, i) => GestureDetector(
@@ -308,7 +377,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                     ),
                   ),
                 ),
-              // ناوەڕۆکی ناردن
+              // Input bar
               Container(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 decoration: BoxDecoration(
@@ -378,7 +447,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
   }
 
   Widget _messageBubble(FriendMessage msg) {
-    final isMe = msg.senderId == ChatRepository.instance.currentUserId;
+    final isMe = msg.senderId == ApiClient.instance.currentUserId;
     final time = DateTime.fromMillisecondsSinceEpoch(msg.timestamp);
     final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 

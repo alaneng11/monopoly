@@ -49,3 +49,9 @@ Thumbs.db
 
 # Freebuff internal
 .freebuff/
+
+# Scratch & temporary test scripts
+scratch/
+backend/data.db
+backend/data.sqlite3
+

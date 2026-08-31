@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/game/hawler_board.dart';
 import '../../data/local/persistence.dart';
+import '../../data/online/api_client.dart';
+import '../../data/online/online_repository.dart';
 import '../../domain/ai_brain.dart';
 import '../../domain/game_engine.dart';
 import '../../domain/models/game_models.dart';
@@ -16,6 +18,8 @@ enum GameMode { local, onlineHost, onlineClient }
 class GameSession {
   final GameState? game;
   final GameMode mode;
+  final String roomCode;
+  final String myPlayerId;
   final bool diceRolling;
   final bool tokenMoving;
   final bool busy;
@@ -33,6 +37,8 @@ class GameSession {
   const GameSession({
     this.game,
     this.mode = GameMode.local,
+    this.roomCode = '',
+    this.myPlayerId = '',
     this.diceRolling = false,
     this.tokenMoving = false,
     this.busy = false,
@@ -49,12 +55,15 @@ class GameSession {
   });
 
   bool get hasGame => game != null;
+  bool get isOnline => mode != GameMode.local && roomCode.isNotEmpty;
   Player? get currentPlayer => game?.currentPlayer;
   bool get gameOver => game?.phase == GamePhase.gameOver;
 
   GameSession copyWith({
     GameState? game,
     GameMode? mode,
+    String? roomCode,
+    String? myPlayerId,
     bool? diceRolling,
     bool? tokenMoving,
     bool? busy,
@@ -76,6 +85,8 @@ class GameSession {
       GameSession(
         game: game ?? this.game,
         mode: mode ?? this.mode,
+        roomCode: roomCode ?? this.roomCode,
+        myPlayerId: myPlayerId ?? this.myPlayerId,
         diceRolling: diceRolling ?? this.diceRolling,
         tokenMoving: tokenMoving ?? this.tokenMoving,
         busy: busy ?? this.busy,
@@ -94,12 +105,13 @@ class GameSession {
 
 final gameSessionProvider = NotifierProvider<GameSessionController, GameSession>(GameSessionController.new);
 
-/// کۆنترۆڵەری ڕوونکردنەوە — لێخوڕینی ئەندازە + AI + Pass&Play.
+/// کۆنترۆڵەری ڕوونکردنەوە — لێخوڕینی ئەندازە + AI + Pass&Play + Online Multiplayer.
 class GameSessionController extends Notifier<GameSession> {
   final GameEngine engine = GameEngine();
   final AiBrain brain = AiBrain();
   bool _active = true;
   Timer? _aiTimer;
+  StreamSubscription<GameState?>? _onlineGameSub;
   GameCard? _pendingCard;
   int _totalTrades = 0;
   int _totalAuctionsWon = 0;
@@ -113,6 +125,7 @@ class GameSessionController extends Notifier<GameSession> {
     ref.onDispose(() {
       _active = false;
       _aiTimer?.cancel();
+      _onlineGameSub?.cancel();
     });
     return const GameSession();
   }
@@ -122,10 +135,10 @@ class GameSessionController extends Notifier<GameSession> {
   // ------------------------------------------------------------------
 
   void createLocalGame(List<PlayerSetup> setups, {bool saveAndExitAllowed = true}) {
+    _onlineGameSub?.cancel();
     final result = engine.createGame(board: HawlerBoard.build(), setups: setups);
     _apply(result);
     if (!result.isOk) return;
-    // دەستپێکردنی ئێرژی و یارمەتیدەرەکان
     var s = result.state!;
     s = s.copyWith(
       diceEnergy: s.maxDiceEnergy,
@@ -133,10 +146,43 @@ class GameSessionController extends Notifier<GameSession> {
       maxDiceEnergy: 10,
       energyRegenRate: 1,
     );
-    state = state.copyWith(game: s);
+    state = state.copyWith(game: s, mode: GameMode.local, roomCode: '', myPlayerId: '');
     LocalPersistence.saveGame(s);
     _maybeRunAi();
     _maybeHandoff(s, null);
+  }
+
+  void startOnlineGame({
+    required String roomCode,
+    required String myPlayerId,
+    required List<PlayerSetup> setups,
+  }) {
+    _onlineGameSub?.cancel();
+    final cleanCode = roomCode.toUpperCase();
+    final result = engine.createGame(board: HawlerBoard.build(), setups: setups);
+    final s = result.isOk ? result.state! : null;
+
+    state = GameSession(
+      game: s,
+      mode: GameMode.onlineClient,
+      roomCode: cleanCode,
+      myPlayerId: myPlayerId,
+      showHandoff: false,
+    );
+
+    // Watch remote sync from Railway
+    _onlineGameSub = GameSyncRepository.instance.watchGame(cleanCode, HawlerBoard.build()).listen((remoteState) {
+      if (!_active || remoteState == null) return;
+      state = state.copyWith(
+        game: remoteState,
+        busy: false,
+        diceRolling: false,
+        tokenMoving: false,
+      );
+      if (remoteState.phase == GamePhase.gameOver) {
+        _onGameOver(remoteState);
+      }
+    });
   }
 
   bool get hasLocalSetup => state.hasGame && state.mode == GameMode.local;
@@ -145,7 +191,6 @@ class GameSessionController extends Notifier<GameSession> {
     final j = await LocalPersistence.loadGame();
     if (j == null) return;
     var s = LocalPersistence.deserialize(j, HawlerBoard.build());
-    // پاراستن لە دۆخە نێوەندەکان — گەڕانەوە بۆ دۆخی پارێزراو
     const safePhases = [GamePhase.awaitingRoll, GamePhase.endTurn, GamePhase.gameOver];
     if (!safePhases.contains(s.phase)) {
       s = s.copyWith(phase: GamePhase.endTurn);
@@ -187,7 +232,6 @@ class GameSessionController extends Notifier<GameSession> {
 
   List<String> get humanIds => state.game?.players.where((p) => p.kind == PlayerKind.human && !p.bankrupt).map((p) => p.id).toList() ?? [];
 
-  /// Pass & Play: ئایا پێویستە پردی گواستنەوە پیشان بدرێت؟
   bool _needsHandoff(GameState g) {
     if (state.mode != GameMode.local) return false;
     final humans = g.players.where((p) => p.kind == PlayerKind.human && !p.bankrupt).length;
@@ -220,6 +264,44 @@ class GameSessionController extends Notifier<GameSession> {
     if (_isAi(cur)) return;
     if (_needsHandoff(g) && state.showHandoff) return;
 
+    if (state.isOnline) {
+      state = state.copyWith(busy: true, diceRolling: true);
+      final res = await ApiClient.instance.rollDice(state.roomCode);
+      if (!res.ok || res.data == null) {
+        state = state.copyWith(busy: false, diceRolling: false, error: res.error ?? 'هەڵە لە هاویشتنی بەرد');
+        return;
+      }
+
+      final diceData = res.data!['dice'] as List?;
+      final d1 = (diceData != null && diceData.isNotEmpty) ? (diceData[0] as num).toInt() : 1;
+      final d2 = (diceData != null && diceData.length > 1) ? (diceData[1] as num).toInt() : 1;
+      final total = (res.data!['total'] as num?)?.toInt() ?? (d1 + d2);
+
+      state = state.copyWith(
+        game: g.copyWith(dice: [d1, d2]),
+        diceRolling: false,
+        clearError: true,
+      );
+
+      // Animate movement step-by-step
+      await _animateMoveOnline(cur.id, total);
+
+      // Move on backend
+      await ApiClient.instance.movePlayer(state.roomCode);
+
+      // Resolve landing on backend
+      await ApiClient.instance.resolveLanding(state.roomCode);
+
+      // Fetch and emit fresh state
+      final stateRes = await ApiClient.instance.getGameState(state.roomCode);
+      if (stateRes.ok && stateRes.data != null) {
+        GameSyncRepository.instance.parseAndEmit(state.roomCode, stateRes.data!, HawlerBoard.build());
+      }
+
+      state = state.copyWith(busy: false);
+      return;
+    }
+
     GameResult<GameState> r;
     if (cur.inJail) {
       state = state.copyWith(busy: true, diceRolling: true);
@@ -235,9 +317,7 @@ class GameSessionController extends Notifier<GameSession> {
       return;
     }
     final g2 = r.state!;
-    // گەڕانەوەی مولتیپلایەر بۆ ١ دوای هەر داودانێک
     state = state.copyWith(game: g2.copyWith(diceMultiplier: 1), diceRolling: false, clearError: true);
-    // تۆماری چالێنژە: ژمارەی داودان
     _totalDiceRolled++;
     try {
       ref.read(challengeProvider.notifier).incrementProgress('roll_5');
@@ -252,29 +332,48 @@ class GameSessionController extends Notifier<GameSession> {
     }
   }
 
-  Future<void> _animateMove(GameState g, String playerId) async {
-    final totalSteps = g.dice.fold<int>(0, (a, b) => a + b);
-    state = state.copyWith(tokenMoving: true, busy: true, moveSteps: totalSteps);
-    
-    // جوڵان قۆنگ بە قۆنگ — هەر قۆنگێک ئاستی تەختە نوێ دەکاتەوە
+  Future<void> _animateMoveOnline(String playerId, int totalSteps) async {
+    if (!state.hasGame || totalSteps <= 0) return;
+    state = state.copyWith(tokenMoving: true, moveSteps: totalSteps);
+
+    final g = state.game!;
     final boardLen = g.board.length;
-    var currentPos = g.playerById(playerId)!.position;
-    
+    final p = g.playerById(playerId);
+    if (p == null) return;
+    var currentPos = p.position;
+
     for (var step = 0; step < totalSteps; step++) {
       if (!_active) return;
       currentPos = (currentPos + 1) % boardLen;
-      // نوێکردنەوەی شوێنی یاریزان بۆ هەر قۆنگ
-      final players = g.players.map((p) => 
+      final players = state.game!.players.map((pl) =>
+        pl.id == playerId ? pl.copyWith(position: currentPos) : pl
+      ).toList();
+      state = state.copyWith(game: state.game!.copyWith(players: players));
+      await Future.delayed(const Duration(milliseconds: 180));
+    }
+
+    state = state.copyWith(tokenMoving: false);
+  }
+
+  Future<void> _animateMove(GameState g, String playerId) async {
+    final totalSteps = g.dice.fold<int>(0, (a, b) => a + b);
+    state = state.copyWith(tokenMoving: true, busy: true, moveSteps: totalSteps);
+
+    final boardLen = g.board.length;
+    var currentPos = g.playerById(playerId)!.position;
+
+    for (var step = 0; step < totalSteps; step++) {
+      if (!_active) return;
+      currentPos = (currentPos + 1) % boardLen;
+      final players = g.players.map((p) =>
         p.id == playerId ? p.copyWith(position: currentPos) : p
       ).toList();
       final intermediate = g.copyWith(players: players);
       state = state.copyWith(game: intermediate);
-      // سووڕاندن — هەر قۆنگ ٢٥٠ms
       await Future.delayed(const Duration(milliseconds: 250));
     }
-    
+
     if (!_active) return;
-    // ئەنجامی ڕاستەقینە — جوڵان لە ئەنجامی بەرد
     final r = engine.movePlayer(g, playerId);
     if (!r.isOk) {
       state = state.copyWith(tokenMoving: false, busy: false, error: r.error!.messageKu);
@@ -300,19 +399,31 @@ class GameSessionController extends Notifier<GameSession> {
         if (_isAi(cur)) {
           await _aiPropertyDecision(g, cur!);
         } else {
-          // UI پیشاندانی دیالۆگ لە بینەردا دەکات
           state = state.copyWith(busy: false);
         }
       case GamePhase.cardEvent:
         await _drawCard(g, playerId);
+        if (_isAi(cur)) {
+          await Future.delayed(const Duration(milliseconds: 1400));
+          acknowledgeCard();
+        }
       case GamePhase.endTurn:
         state = state.copyWith(busy: false);
+        if (_isAi(cur)) {
+          await _finish(g, playerId);
+        }
       case GamePhase.auctioning:
         state = state.copyWith(busy: false);
+        if (_isAi(cur)) {
+          _scheduleAuctionAi(g);
+        }
       case GamePhase.gameOver:
         await _onGameOver(g);
       default:
         state = state.copyWith(busy: false);
+        if (_isAi(cur) && g.phase == GamePhase.awaitingRoll) {
+          _maybeRunAi();
+        }
     }
   }
 
@@ -347,11 +458,15 @@ class GameSessionController extends Notifier<GameSession> {
   }
 
   Future<void> _afterCard(GameState g, String playerId) async {
+    final cur = g.playerById(playerId);
     if (g.phase == GamePhase.landing) {
       await Future.delayed(const Duration(milliseconds: 500));
       await _resolveLanding(g, playerId);
     } else if (g.phase == GamePhase.endTurn) {
       state = state.copyWith(busy: false);
+      if (_isAi(cur)) {
+        await _finish(g, playerId);
+      }
     } else if (g.phase == GamePhase.gameOver) {
       await _onGameOver(g);
     } else {
@@ -369,6 +484,23 @@ class GameSessionController extends Notifier<GameSession> {
     if (g.phase != GamePhase.propertyDecision) return;
     final cur = g.currentPlayer!;
     if (_isAi(cur)) return;
+
+    if (state.isOnline) {
+      state = state.copyWith(busy: true);
+      if (buyIt) {
+        final def = g.board[cur.position];
+        await ApiClient.instance.buyProperty(state.roomCode, cur.position, def.price);
+      } else {
+        await ApiClient.instance.endTurn(state.roomCode);
+      }
+      final stateRes = await ApiClient.instance.getGameState(state.roomCode);
+      if (stateRes.ok && stateRes.data != null) {
+        GameSyncRepository.instance.parseAndEmit(state.roomCode, stateRes.data!, HawlerBoard.build());
+      }
+      state = state.copyWith(busy: false);
+      return;
+    }
+
     state = state.copyWith(busy: true);
     final tileIndex = cur.position;
     final r = buyIt ? engine.buyTile(g, cur.id) : engine.declinePurchase(g, cur.id);
@@ -380,7 +512,6 @@ class GameSessionController extends Notifier<GameSession> {
     if (buyIt && tileIndex == 39) {
       await ref.read(achievementsProvider.notifier).unlock('landmark');
     }
-    // تۆماری چالێنژە: کڕین
     if (buyIt) {
       try {
         ref.read(challengeProvider.notifier).incrementProgress('buy_3');
@@ -397,6 +528,10 @@ class GameSessionController extends Notifier<GameSession> {
 
   Future<void> bid(int amount) async {
     if (!state.hasGame || state.busy) return;
+    if (state.isOnline) {
+      await ApiClient.instance.placeAuctionBid(state.roomCode, amount);
+      return;
+    }
     final g = state.game!;
     final cur = g.currentPlayer;
     if (cur == null || _isAi(cur)) return;
@@ -415,6 +550,10 @@ class GameSessionController extends Notifier<GameSession> {
 
   void passBid() {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.passAuctionBid(state.roomCode);
+      return;
+    }
     final g = state.game!;
     final cur = g.currentPlayer;
     if (cur == null || _isAi(cur)) return;
@@ -464,7 +603,6 @@ class GameSessionController extends Notifier<GameSession> {
         if (r.state!.phase == GamePhase.auctioning) {
           _scheduleAuctionAi(r.state!);
         } else {
-          // مزایەدە تەواوبوو — بەردەوامبوونی سووڕی یاریزانی چالاک
           final cur = r.state!.currentPlayer!;
           if (cur.isAi) {
             await _finish(r.state!, cur.id);
@@ -480,15 +618,24 @@ class GameSessionController extends Notifier<GameSession> {
 
   void proposeTrade(TradeOffer offer) {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.proposeTrade(
+        roomCode: state.roomCode,
+        toPlayerId: offer.toPlayerId,
+        fromMoney: offer.moneyFrom,
+        toMoney: offer.moneyTo,
+        fromTiles: offer.tilesFrom,
+        toTiles: offer.tilesTo,
+      );
+      return;
+    }
     final r = engine.proposeTrade(state.game!, offer);
     _apply(r);
     if (r.isOk) {
       final target = r.state!.playerById(offer.toPlayerId);
       final isAiTarget = target?.isAi ?? false;
       state = state.copyWith(showTradeDialog: !isAiTarget, incomingTrade: r.state!.pendingTrade);
-      if (!isAiTarget) {
-        // مرۆڤ — خاوەنی ڕیز تەنها دەتوانێت چاوەڕوان بێت
-      } else {
+      if (isAiTarget) {
         _scheduleTradeAiResponse(r.state!);
       }
     }
@@ -496,6 +643,10 @@ class GameSessionController extends Notifier<GameSession> {
 
   void respondTrade(bool accept) {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.respondTrade(state.roomCode, accept);
+      return;
+    }
     final t = state.game!.pendingTrade;
     if (t == null) return;
     final cur = state.game!.currentPlayer!;
@@ -521,7 +672,6 @@ class GameSessionController extends Notifier<GameSession> {
   }
 
   void cancelTradeUi() {
-    // ڕەتکردنەوەی بازرگانی چالاک — قۆناغ دەگەڕێتەوە بۆ کۆتایی سووڕ
     if (state.hasGame && state.game!.pendingTrade != null) {
       final t = state.game!.pendingTrade!;
       final r = engine.respondToTrade(state.game!, t.toPlayerId, false);
@@ -554,6 +704,10 @@ class GameSessionController extends Notifier<GameSession> {
 
   void upgradeTile(int tileIndex) {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.upgradeProperty(state.roomCode, tileIndex);
+      return;
+    }
     final g = state.game!;
     final r = engine.upgradeTile(g, g.currentPlayer!.id, tileIndex);
     _apply(r);
@@ -567,12 +721,20 @@ class GameSessionController extends Notifier<GameSession> {
 
   void mortgageTile(int tileIndex) {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.mortgageProperty(state.roomCode, tileIndex);
+      return;
+    }
     final r = engine.mortgageTile(state.game!, state.game!.currentPlayer!.id, tileIndex);
     _apply(r);
   }
 
   void unmortgageTile(int tileIndex) {
     if (!state.hasGame) return;
+    if (state.isOnline) {
+      ApiClient.instance.unmortgageProperty(state.roomCode, tileIndex);
+      return;
+    }
     final r = engine.unmortgageTile(state.game!, state.game!.currentPlayer!.id, tileIndex);
     _apply(r);
   }
@@ -594,11 +756,9 @@ class GameSessionController extends Notifier<GameSession> {
     }
   }
 
-  /// گۆڕینی داواکاری بۆ ئێرژی بەرزکردنەوە
   void setDiceMultiplier(int multiplier) {
     if (!state.hasGame) return;
     final g = state.game!;
-    // بەرزکردنەوەی ئێرژی = کەمکردنەوەی ئێرژی
     final energyCost = multiplier - 1;
     if (g.diceEnergy < energyCost) {
       showToast('ئێرژی بەس نییە بۆ ×$multiplier');
@@ -628,9 +788,20 @@ class GameSessionController extends Notifier<GameSession> {
     if (!state.hasGame || state.busy) return;
     final g = state.game!;
     if (g.phase == GamePhase.gameOver) return;
+
+    if (state.isOnline) {
+      state = state.copyWith(busy: true);
+      await ApiClient.instance.endTurn(state.roomCode);
+      final stateRes = await ApiClient.instance.getGameState(state.roomCode);
+      if (stateRes.ok && stateRes.data != null) {
+        GameSyncRepository.instance.parseAndEmit(state.roomCode, stateRes.data!, HawlerBoard.build());
+      }
+      state = state.copyWith(busy: false);
+      return;
+    }
+
     final prevId = g.currentPlayer?.id;
     if (g.phase != GamePhase.endTurn) {
-      // ڕێگەدان بە کۆتایی له قۆناغی بڕیار/کارتدا بەبێ بڕیار
       showToast('سەرەتا بڕیاری ئەم قۆناغە بدە');
       return;
     }
@@ -657,7 +828,7 @@ class GameSessionController extends Notifier<GameSession> {
   // ------------------------------------------------------------------
 
   void _maybeRunAi() {
-    if (!state.hasGame) return;
+    if (!state.hasGame || state.isOnline) return;
     final g = state.game!;
     final cur = g.currentPlayer;
     if (!_isAi(cur)) return;
@@ -763,7 +934,6 @@ class GameSessionController extends Notifier<GameSession> {
         await _finish(r.state!, ai.id);
       }
     } else {
-      // ناتوانێت بکڕێت — مزایەدە
       final r2 = engine.declinePurchase(g2, ai.id);
       _apply(r2);
     }
@@ -800,14 +970,15 @@ class GameSessionController extends Notifier<GameSession> {
   Future<void> _onGameOver(GameState g) async {
     state = state.copyWith(aiActing: false, busy: false);
     await LocalPersistence.clearGame();
-    // نوێکردنەوەی پرۆفایل (XP/بردنەوە)
+
     final winner = g.playerById(g.winnerId);
     final profile = await LocalPersistence.loadProfile();
-    final isLocalWin = winner != null && winner.kind == PlayerKind.human;
+    final isLocalWin = winner != null && (winner.kind == PlayerKind.human || (state.isOnline && winner.id == state.myPlayerId));
     final localHumans = g.players.where((p) => p.kind == PlayerKind.human).toList();
-    if (localHumans.isNotEmpty) {
+
+    if (localHumans.isNotEmpty || state.isOnline) {
       profile['games'] = (profile['games'] as int? ?? 0) + 1;
-      if (isLocalWin && localHumans.any((h) => h.id == winner.id)) {
+      if (isLocalWin) {
         profile['wins'] = (profile['wins'] as int? ?? 0) + 1;
         profile['coins'] = (profile['coins'] as int? ?? 0) + 500;
         await ref.read(achievementsProvider.notifier).unlock('first_win');
@@ -818,13 +989,12 @@ class GameSessionController extends Notifier<GameSession> {
       profile['xp'] = (profile['xp'] as int? ?? 0) + 120 + (isLocalWin ? 180 : 0);
       final level = ((profile['xp'] as int) ~/ 1000) + 1;
       profile['level'] = level;
-      // ئەگەر ١٠٠٠٠ زێڕ کۆبوو بێت
       if (g.netWorth(g.winnerId) >= 10000) {
         await ref.read(achievementsProvider.notifier).unlock('rich');
       }
       await LocalPersistence.saveProfile(profile);
     }
-    // تۆماری تۆماری یاری
+
     final duration = DateTime.now().difference(_gameStartTime).inSeconds;
     final record = {
       'winnerId': g.winnerId,
@@ -852,12 +1022,14 @@ class GameSessionController extends Notifier<GameSession> {
   void quitGame() {
     LocalPersistence.clearGame();
     _aiTimer?.cancel();
+    _onlineGameSub?.cancel();
     state = const GameSession();
   }
 
   void leaveToSave() {
-    if (state.hasGame) LocalPersistence.saveGame(state.game!);
+    if (state.hasGame && !state.isOnline) LocalPersistence.saveGame(state.game!);
     _aiTimer?.cancel();
+    _onlineGameSub?.cancel();
     state = const GameSession();
   }
 }

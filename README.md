@@ -1,92 +1,70 @@
 # مۆنۆپۆلی هەولێر — Hawler Monopoly
+### Full Commercial Multiplayer Kurdish Board Game & SaaS Platform
 
-🏰 A premium mobile board game themed around Hawler (Erbil) and Kurdish culture.
+🏰 A complete, commercial-quality Kurdish online multiplayer board game themed around Hawler (Erbil) and Kurdish culture.
 
-**Kurdish Sorani** UI • RTL layout • Pass & Play • AI • Online Multiplayer
+**Kurdish Sorani** UI • RTL layout • Pass & Play • 6 AI Personalities • Real-Time Online Multiplayer • Live Auctions • P2P Trading • Banking & Mortgages • Seasons & Battle Pass • Cosmetics Shop • Match History • Spectator Mode • PostgreSQL 16 on Railway
 
-## Features
+---
 
-- 🎲 **Dice & Movement** — Animated dual dice with energy system and multipliers (×1–×20)
-- 🏠 **Properties** — 40 Kurdish-named tiles with rent, upgrades, mortgage, trading
-- 🤖 **AI** — 6 personalities × 4 difficulty levels
-- 💰 **Economy** — Full money system with transactions, rent, taxes, auctions
-- 🎯 **Challenges** — Daily & weekly challenges with real rewards
-- 🏆 **Achievements** — Unlock achievements from actual gameplay
-- 📊 **Leaderboards** — Weekly, monthly, and all-time rankings
-- 💬 **Chat** — In-game and friend-to-friend real-time chat with emoji
-- 👥 **Friends** — Friend list, requests, and direct messaging
-- 🎴 **Cards** — Chance & event cards with Hawler-themed effects
-- 🎪 **Events** — Dynamic events: tourism boom, festivals, market crashes
-- 📱 **Cross-platform** — Android, iOS, Web, Desktop
+## 🌟 Key Features
 
-## Quick Start
+- 🎲 **Server-Authoritative Game Engine** — Authoritative dice rolls, step-by-step token animations on 40 Hawler landmarks, doubles mechanics, 30s turn timeout scheduler.
+- 🏰 **40 Hawler Landmarks & Properties** — Citadel, Minaret of Choli, Sami Abdulrahman Park, Majidi Mall, Dream City, Empire World, Korek Mountain.
+- 🔨 **Live Auction System** — Real-time bidding with a 20-second timer, automatic timer extensions on outbids, and instant property deed assignment.
+- 🤝 **Player-to-Player Trading** — Atomic multi-asset trade proposals (cash, properties) with dual-acceptance validation.
+- 🏦 **Mortgage & Banking** — Mortgage properties for 50% cash and unmortgage with standard 10% interest.
+- 🤖 **Strategic AI** — 6 distinct AI personalities (Balanced, Investor, Aggressive, Conservative, Risk Taker, Opportunist) across 4 difficulty levels.
+- 🏆 **Seasons & Battle Pass** — 30 tiers of progression with XP, exclusive cosmetics, coins, and gems.
+- 🎁 **Daily Rewards & Missions** — 7-day login streaks and dynamic daily/weekly missions.
+- 🛍️ **Cosmetics Shop** — Dice skins (Gold, Citadel, Neon, Emerald), Avatar frames, and Board themes.
+- 📜 **Match History & Deep Stats** — Completed matches saved to PostgreSQL with full player breakdown.
+- 💬 **Real-Time Chat & Quick Reactions** — In-game chat, floating emojis (`🔥`, `❤️`, `😂`, `👍`), and private friend messaging.
+- 👁️ **Spectator Mode** — Watch live games in real time.
+- 🔊 **Sound & Haptics** — Web AudioContext synthesized sound effects and device haptic vibrations.
 
-### Flutter App
+---
+
+## 🚀 Quick Start
+
+### 1. Flutter Web / Mobile Client
 ```bash
 cd hawler_monopoly
 flutter pub get
-flutter run
+flutter run -d chrome --web-port=5000
 ```
 
-### Backend Server
+### 2. Backend Server (Local / Railway)
 ```bash
 cd backend
 npm install
-cp .env.example .env  # Edit JWT_SECRET and other values
-npm start
+npm run dev
 ```
 
-Backend runs at `http://localhost:3000` with health check at `/health`.
-
-## Architecture
-
-```
-hawler_monopoly/    → Flutter client (Riverpod + GoRouter)
-backend/            → Node.js server (Express + SQLite + WebSocket)
-docs/               → Documentation
-```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture.
-
-## Environment Variables
-
-### Backend
-| Variable | Default | Description |
-|----------|---------|-------------|
-| PORT | 3000 | Server port |
-| DB_PATH | ./data.db | SQLite database path |
-| JWT_SECRET | (required) | Secret for JWT tokens |
-| JWT_EXPIRES_IN | 7d | Token expiry |
-
-### Flutter
-| Variable | Default | Description |
-|----------|---------|-------------|
-| API_BASE_URL | http://localhost:3000 | Backend URL |
-
-## Deployment
-
-### Railway (Backend)
-1. Push to GitHub
-2. Connect repo in Railway
-3. Add SQLite volume or configure `DB_PATH`
-4. Set environment variables (especially `JWT_SECRET`)
-5. Railway auto-deploys via Dockerfile
-
-### Flutter Web
+### 3. Automated Verification Tests
 ```bash
+# Run 30-Scenario Full QA & Multiplayer Stress Suite
+node scratch/qa_full_suite.js
+
+# Run Migration DDL Verification
+node backend/src/migrate.js
+
+# Run Flutter Analyzer
 cd hawler_monopoly
-flutter build web
-# Serve build/web/ directory
+flutter analyze --no-pub
 ```
 
-## Tech Stack
+---
 
-- **Frontend**: Flutter 3.3+, Dart, Riverpod, GoRouter
-- **Backend**: Node.js 18+, Express, SQLite (better-sqlite3), WebSocket (ws)
-- **Auth**: JWT (jsonwebtoken), bcryptjs
-- **Database**: SQLite with WAL mode
-- **Deployment**: Docker, Railway
+## 📚 Complete Technical Documentation
 
-## License
+- **[PRODUCTION_INFRASTRUCTURE.md](PRODUCTION_INFRASTRUCTURE.md)** — Production Architecture, Services, Storage, Schedulers & Scaling
+- **[RAILWAY_SETUP.md](RAILWAY_SETUP.md)** — Step-by-Step Railway PostgreSQL Linking & Deployment Guide
+- **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** — Database Migration System, DDL Scripts & CLI
+- **[DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)** — Backups, Snapshots, Restores & Incident Playbooks
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Full Frontend & Backend System Architecture
+- **[DATABASE.md](DATABASE.md)** — 26 Relational Tables, Constraints, Indices & Schema Reference
+- **[API.md](API.md)** — REST API & WebSocket Protocol Documentation
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** — Environment Variables, Local Setup & CI/CD
+- **[FEATURE_STATUS.md](FEATURE_STATUS.md)** — 45-Phase Master Audit & Verification Matrix
 
-Proprietary — All rights reserved.
