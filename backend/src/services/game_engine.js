@@ -192,9 +192,10 @@ async function buyProperty(roomCode, userId) {
 
     // Update game state
     await db.run(
-      'UPDATE game_states SET players = $1, phase = $2, dice_energy = MIN(dice_energy + 1, max_dice_energy), state_version = state_version + 1, updated_at = $3 WHERE room_code = $4',
+      'UPDATE game_states SET players = $1, phase = $2, dice_energy = LEAST(dice_energy + 1, max_dice_energy), state_version = state_version + 1, updated_at = $3 WHERE room_code = $4',
       [JSON.stringify(updatedPlayers), 'endTurn', now(), roomCode]
     );
+
 
     // Record transaction
     await db.run(
