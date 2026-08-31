@@ -33,7 +33,19 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/:code', authMiddleware, async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const room = await getRoom(code);
+    if (!room) return res.status(404).json({ error: 'ژوورەکە نەدۆزرایەوە.' });
+    res.json({ room });
+  } catch (err) {
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
+  }
+});
+
 router.post('/:code/join', authMiddleware, async (req, res) => {
+
   try {
     const code = req.params.code.toUpperCase();
     const room = await queryOne('SELECT * FROM game_rooms WHERE code = $1', [code]);
@@ -370,6 +382,21 @@ router.get('/:code/state', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
+
+router.post('/:code/spectate', authMiddleware, async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const state = await engine.getState(code);
+    if (!state) return res.status(404).json({ error: 'ژوور نەدۆزرایەوە.' });
+    try {
+      await run('INSERT INTO spectators (room_code, user_id, joined_at) VALUES ($1,$2,$3)', [code, req.userId, Math.floor(Date.now() / 1000)]);
+    } catch (_) {}
+    res.json({ success: true, roomCode: code, state });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
+
 
 // ── Helper ──────────────────────────────────────────────────
 

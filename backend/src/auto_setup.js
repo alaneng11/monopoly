@@ -440,35 +440,22 @@ const UP_SQLITE = UP
 async function autoSetup() {
   await initDb();
 
-  // Check if tables exist
-  let tableCheck;
-  if (USE_PG) {
-    tableCheck = await queryOne("SELECT COUNT(*) as c FROM information_schema.tables WHERE table_schema = 'public'").catch(() => null);
-  } else {
-    tableCheck = await queryOne("SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='users'").catch(() => null);
-  }
-
-  const tablesExist = tableCheck && (
-    USE_PG ? parseInt(tableCheck.c) > 0 : parseInt(tableCheck.c) === 1
-  );
-
-  if (!tablesExist) {
-    console.log('🔄 Running migrations...');
-    const sql = USE_PG ? UP : UP_SQLITE;
-    const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
-    let count = 0;
-    for (const stmt of statements) {
-      try {
-        await run(stmt);
-        count++;
-      } catch (e) {
-        if (!e.message?.includes('already exists')) {
-          console.error(`  ⚠️ ${e.message}`);
-        }
+  console.log('🔄 Running migrations and schema verification...');
+  const sql = USE_PG ? UP : UP_SQLITE;
+  const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+  let count = 0;
+  for (const stmt of statements) {
+    try {
+      await run(stmt);
+      count++;
+    } catch (e) {
+      if (!e.message?.includes('already exists')) {
+        console.error(`  ⚠️ ${e.message}`);
       }
     }
-    console.log(`✅ Migrations done: ${count} statements`);
   }
+  console.log(`✅ Migrations verified: ${count} statements`);
+
 
   // Seed achievements if empty
   const achCount = await queryOne('SELECT COUNT(*) as c FROM achievements').catch(() => null);
