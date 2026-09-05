@@ -56,13 +56,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (user != null) {
         await ref.read(profileProvider.notifier).syncWithServer(user);
       }
+      if (!mounted) return;
       ChatRepository.instance.init();
       context.go('/home');
     } else {
-      setState(() {
-        _busy = false;
-        _errorMessage = res.error ?? 'هەڵەیەک ڕوویدا لە چوونەژوورەوە.';
-      });
+      // سێرڤەر بەردەست نییە — بەردەوام بە بە دۆخی ئۆفلاین.
+      // یاریی ناوخۆیی (Pass & Play) پێویستی بە سێرڤەر نییە، بۆیە نابێت
+      // شکستی چوونەژوورەوە ڕێگری لە یاریکردن بکات.
+      await ref.read(profileProvider.notifier).setLocalName(name);
+      if (!mounted) return;
+      context.go('/home');
     }
   }
 
@@ -87,6 +90,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (user != null) {
         await ref.read(profileProvider.notifier).syncWithServer(user);
       }
+      if (!mounted) return;
       ChatRepository.instance.init();
       context.go('/home');
     } else {
@@ -127,6 +131,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (user != null) {
         await ref.read(profileProvider.notifier).syncWithServer(user);
       }
+      if (!mounted) return;
       ChatRepository.instance.init();
       context.go('/home');
     } else {

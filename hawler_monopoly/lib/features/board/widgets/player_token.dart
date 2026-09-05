@@ -6,14 +6,17 @@ import '../../../core/theme/app_colors.dart';
 /// پارچەی یاریزان (پیاسە) لەگەڵ کاراکتەر و ئەنیمەیشنی بزین.
 class PlayerToken extends StatefulWidget {
   final Color color;
-  final String emoji;
+
+  /// ئایکۆنی کاراکتەر. پێشتر ئیمۆجی بەکاردەهێنرا، بەڵام CanvasKit فۆنتی
+  /// ئیمۆجی لەخۆ ناگرێت و وەک چوارگۆشەی بەتاڵ (tofu) پیشان دەدرا.
+  final IconData icon;
   final double size;
   final bool isActive;
 
   const PlayerToken({
     super.key,
     required this.color,
-    required this.emoji,
+    required this.icon,
     this.size = 22,
     this.isActive = false,
   });
@@ -62,9 +65,10 @@ class _PlayerTokenState extends State<PlayerToken> with SingleTickerProviderStat
           ],
         ),
         alignment: Alignment.center,
-        child: Text(
-          widget.emoji,
-          style: TextStyle(fontSize: widget.size * 0.52, height: 1),
+        child: Icon(
+          widget.icon,
+          size: widget.size * 0.54,
+          color: Colors.white,
         ),
       ),
     );

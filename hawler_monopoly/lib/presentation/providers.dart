@@ -116,6 +116,15 @@ class ProfileController extends AsyncNotifier<ProfileState> {
     await updateProfile({'name': name.trim(), 'displayName': name.trim()});
   }
 
+  /// دانانی ناوی ناوخۆیی بێ سێرڤەر — بۆ دۆخی ئۆفلاین کاتێک
+  /// چوونەژوورەوەی میوان سەرکەوتوو نەبوو.
+  Future<void> setLocalName(String name) async {
+    final cur = state.value?.data ?? await LocalPersistence.loadProfile();
+    final merged = {...cur, 'name': name.trim(), 'displayName': name.trim(), 'offline': true};
+    state = AsyncData(ProfileState(merged));
+    await LocalPersistence.saveProfile(merged);
+  }
+
   Future<void> setAvatar(String url) async {
     await updateProfile({'avatarUrl': url, 'avatar_url': url});
   }

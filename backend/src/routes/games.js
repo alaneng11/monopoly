@@ -33,6 +33,26 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+// IMPORTANT: literal paths MUST be declared before the '/:code' wildcard —
+// Express matches in declaration order, so '/public' registered after it was
+// being swallowed as a room code named "public".
+router.get('/public', async (req, res) => {
+  try {
+    const rooms = await query(`
+      SELECT r.code, r.room_name, r.status, r.max_players, r.start_cash,
+        (SELECT COUNT(*) FROM game_room_players WHERE room_code = r.code) as player_count
+      FROM game_rooms r WHERE r.is_public = 1 AND r.status = 'lobby'
+      ORDER BY r.created_at DESC LIMIT 50
+    `);
+    res.json({ rooms: rooms.map(r => ({
+      code: r.code, roomName: r.room_name, status: r.status,
+      playerCount: parseInt(r.player_count), maxPlayers: r.max_players, startCash: r.start_cash,
+    }))});
+  } catch (err) {
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
+  }
+});
+
 router.get('/:code', authMiddleware, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
@@ -172,33 +192,6 @@ router.post('/:code/leave', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/public', async (req, res) => {
-  try {
-    const rooms = await query(`
-      SELECT r.code, r.room_name, r.status, r.max_players, r.start_cash,
-        (SELECT COUNT(*) FROM game_room_players WHERE room_code = r.code) as player_count
-      FROM game_rooms r WHERE r.is_public = 1 AND r.status = 'lobby'
-      ORDER BY r.created_at DESC LIMIT 50
-    `);
-    res.json({ rooms: rooms.map(r => ({
-      code: r.code, roomName: r.room_name, status: r.status,
-      playerCount: parseInt(r.player_count), maxPlayers: r.max_players, startCash: r.start_cash,
-    }))});
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
-  }
-});
-
-router.get('/:code', authMiddleware, async (req, res) => {
-  try {
-    const room = await getRoom(req.params.code.toUpperCase());
-    if (!room) return res.status(404).json({ error: 'ژوورەکە نەدۆزرایەوە.' });
-    res.json({ room });
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
-  }
-});
-
 // ── Server-Authoritative Game Actions ───────────────────────
 
 router.post('/:code/roll', authMiddleware, async (req, res) => {
@@ -243,6 +236,18 @@ router.post('/:code/buy', authMiddleware, async (req, res) => {
     const result = await engine.buyProperty(code, req.userId);
     const state = await engine.getState(code);
     try { require('../index').broadcastToRoom(code, { type: 'property_bought', playerId: req.userId, ...result, state }); } catch (_) {}
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
+  }
+});
+
+router.post('/:code/decline', authMiddleware, async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const result = await engine.declinePurchase(code, req.userId);
+    const state = await engine.getState(code);
+    try { require('../index').broadcastToRoom(code, { type: 'purchase_declined', playerId: req.userId, ...result, state }); } catch (_) {}
     res.json(result);
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
@@ -348,17 +353,6 @@ router.post('/:code/unmortgage', authMiddleware, async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message || 'هەڵەی ناوخۆ.' });
-  }
-});
-
-router.post('/:code/spectate', authMiddleware, async (req, res) => {
-  try {
-    const code = req.params.code.toUpperCase();
-    await run('INSERT INTO spectators (room_code, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [code, req.userId]);
-    const state = await engine.getState(code);
-    res.json({ spectating: true, state });
-  } catch (err) {
-    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 

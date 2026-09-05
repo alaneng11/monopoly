@@ -118,7 +118,7 @@ class MatchHistoryScreen extends ConsumerWidget {
                     Text('بردنەوە: $winnerName',
                       style: AppTextStyles.titleMedium.copyWith(fontSize: 14)),
                     const SizedBox(height: 2),
-                    Text('${playerNames.join(" • ")}',
+                    Text(playerNames.join(" • "),
                       style: AppTextStyles.caption, maxLines: 1, overflow: TextOverflow.ellipsis),
                   ],
                 ),
@@ -126,7 +126,7 @@ class MatchHistoryScreen extends ConsumerWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${_formatDate(date)}', style: AppTextStyles.caption.copyWith(fontSize: 10)),
+                  Text(_formatDate(date), style: AppTextStyles.caption.copyWith(fontSize: 10)),
                   Text('$durationMin:${durationSec.toString().padLeft(2, '0')}', style: AppTextStyles.caption.copyWith(fontSize: 10)),
                 ],
               ),

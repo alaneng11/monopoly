@@ -9,12 +9,19 @@ const { sanitizeText } = require('../utils/validation');
 
 const router = express.Router();
 
-router.get('/:id', async (req, res) => {
+// NOTE: every literal '/me...' path MUST stay above the '/:id' wildcard.
+// Express matches in declaration order — with '/:id' first, `GET /api/users/me`
+// was resolving to a lookup for a user whose id is the string "me" and 404ing,
+// which broke the profile screen for every account.
+router.get('/me', authMiddleware, async (req, res) => {
   try {
-    const user = await queryOne('SELECT id, username, display_name, avatar_url, xp, level, wins, games_played, created_at FROM users WHERE id = $1', [req.params.id]);
+    const user = await queryOne('SELECT * FROM users WHERE id = $1', [req.userId]);
     if (!user) return res.status(404).json({ error: 'یاریزان نەدۆزرایەوە.' });
-    const achievements = await query('SELECT achievement_id, unlocked_at FROM user_achievements WHERE user_id = $1', [req.params.id]);
-    res.json({ user: formatUser(user), achievements: achievements.map(a => ({ id: a.achievement_id, unlockedAt: a.unlocked_at })) });
+    const achievements = await query('SELECT achievement_id, unlocked_at FROM user_achievements WHERE user_id = $1', [req.userId]);
+    res.json({
+      user: formatUser(user),
+      achievements: achievements.map(a => ({ id: a.achievement_id, unlockedAt: a.unlocked_at })),
+    });
   } catch (err) {
     res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
@@ -87,6 +94,18 @@ router.post('/me/avatar', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Avatar upload error:', err);
     res.status(400).json({ error: err.message || 'هەڵە لە بارکردنی وێنە.' });
+  }
+});
+
+// Wildcard LAST, so it can never shadow the literal '/me' paths above.
+router.get('/:id', async (req, res) => {
+  try {
+    const user = await queryOne('SELECT id, username, display_name, avatar_url, xp, level, wins, games_played, created_at FROM users WHERE id = $1', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'یاریزان نەدۆزرایەوە.' });
+    const achievements = await query('SELECT achievement_id, unlocked_at FROM user_achievements WHERE user_id = $1', [req.params.id]);
+    res.json({ user: formatUser(user), achievements: achievements.map(a => ({ id: a.achievement_id, unlockedAt: a.unlocked_at })) });
+  } catch (err) {
+    res.status(500).json({ error: 'هەڵەی ناوخۆ.' });
   }
 });
 

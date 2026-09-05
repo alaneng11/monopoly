@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/services/sound_service.dart';
 import '../../data/game/hawler_board.dart';
 import '../../data/local/persistence.dart';
 import '../../data/online/api_client.dart';
@@ -114,9 +115,7 @@ class GameSessionController extends Notifier<GameSession> {
   StreamSubscription<GameState?>? _onlineGameSub;
   GameCard? _pendingCard;
   int _totalTrades = 0;
-  int _totalAuctionsWon = 0;
   int _totalDiceRolled = 0;
-  int _moneyEarned = 0;
   final DateTime _gameStartTime = DateTime.now();
 
   @override
@@ -290,7 +289,7 @@ class GameSessionController extends Notifier<GameSession> {
       await ApiClient.instance.movePlayer(state.roomCode);
 
       // Resolve landing on backend
-      await ApiClient.instance.resolveLanding(state.roomCode);
+      final landRes = await ApiClient.instance.resolveLanding(state.roomCode);
 
       // Fetch and emit fresh state
       final stateRes = await ApiClient.instance.getGameState(state.roomCode);
@@ -298,7 +297,11 @@ class GameSessionController extends Notifier<GameSession> {
         GameSyncRepository.instance.parseAndEmit(state.roomCode, stateRes.data!, HawlerBoard.build());
       }
 
-      state = state.copyWith(busy: false);
+      // سێرڤەر کارتی چانس/ڕووداو دەکێشێت و جێبەجێی دەکات — لێرەدا
+      // تەنها پیشانی دەدەین.
+      final card = _cardFromJson(landRes.data?['card']);
+      state = state.copyWith(busy: false, drawnCard: card);
+      if (card != null) SoundService.instance.playNotification();
       return;
     }
 
@@ -491,7 +494,9 @@ class GameSessionController extends Notifier<GameSession> {
         final def = g.board[cur.position];
         await ApiClient.instance.buyProperty(state.roomCode, cur.position, def.price);
       } else {
-        await ApiClient.instance.endTurn(state.roomCode);
+        // ڕەتکردنەوە → مزایەدە. (`endTurn` لێرەدا ڕەت دەکرایەوە و
+        // یارییەکە هەڵدەواسرا.)
+        await ApiClient.instance.declinePurchase(state.roomCode);
       }
       final stateRes = await ApiClient.instance.getGameState(state.roomCode);
       if (stateRes.ok && stateRes.data != null) {
@@ -785,7 +790,7 @@ class GameSessionController extends Notifier<GameSession> {
   // ------------------------------------------------------------------
 
   Future<void> endTurn() async {
-    if (!state.hasGame || state.busy) return;
+    if (!state.hasGame) return;
     final g = state.game!;
     if (g.phase == GamePhase.gameOver) return;
 
@@ -826,6 +831,25 @@ class GameSessionController extends Notifier<GameSession> {
   // ------------------------------------------------------------------
   // AI
   // ------------------------------------------------------------------
+
+  /// وەرگێڕانی کارتی سێرڤەر بۆ مۆدێلی ناوخۆیی.
+  GameCard? _cardFromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final effectName = raw['effect'] as String?;
+    final effect = CardEffect.values.firstWhere(
+      (e) => e.name == effectName,
+      orElse: () => CardEffect.gainMoney,
+    );
+    return GameCard(
+      id: raw['id'] as String? ?? '',
+      title: raw['title'] as String? ?? '',
+      description: raw['description'] as String? ?? '',
+      effect: effect,
+      amount: (raw['amount'] as num?)?.toInt() ?? 0,
+      targetTileIndex: (raw['targetTileIndex'] as num?)?.toInt() ?? -1,
+      isEvent: raw['isEvent'] == true,
+    );
+  }
 
   void _maybeRunAi() {
     if (!state.hasGame || state.isOnline) return;
@@ -880,7 +904,7 @@ class GameSessionController extends Notifier<GameSession> {
         }
         if (!_active) return;
         if (!r.isOk) {
-          state = state.copyWith(diceRolling: false, aiActing: false);
+          state = state.copyWith(diceRolling: false, aiActing: false, busy: false);
           return;
         }
         final g2 = r.state!;
@@ -912,7 +936,7 @@ class GameSessionController extends Notifier<GameSession> {
       case GamePhase.gameOver:
         await _onGameOver(g);
       default:
-        state = state.copyWith(aiActing: false);
+        state = state.copyWith(aiActing: false, busy: false);
     }
   }
 
@@ -927,7 +951,7 @@ class GameSessionController extends Notifier<GameSession> {
     _apply(r);
     if (r.isOk) {
       if (r.state!.phase == GamePhase.auctioning) {
-        state = state.copyWith(aiActing: false);
+        state = state.copyWith(aiActing: false, busy: false);
         _scheduleAuctionAi(r.state!);
       } else {
         await Future.delayed(const Duration(milliseconds: 600));
@@ -951,7 +975,7 @@ class GameSessionController extends Notifier<GameSession> {
     final r = engine.finishRound(g, playerId);
     _apply(r);
     if (!r.isOk) {
-      state = state.copyWith(aiActing: false);
+      state = state.copyWith(aiActing: false, busy: false);
       return;
     }
     final g2 = r.state!;
@@ -963,7 +987,9 @@ class GameSessionController extends Notifier<GameSession> {
     _maybeHandoff(g2, playerId);
     _maybeRunAi();
     if (!_isAi(g2.currentPlayer)) {
-      state = state.copyWith(aiActing: false);
+      state = state.copyWith(aiActing: false, busy: false);
+    } else {
+      state = state.copyWith(busy: false);
     }
   }
 
@@ -1002,10 +1028,10 @@ class GameSessionController extends Notifier<GameSession> {
       'playerNames': g.players.map((p) => p.name).toList(),
       'round': g.round,
       'durationSeconds': duration,
-      'moneyEarned': _moneyEarned,
+      'moneyEarned': 0,
       'propertiesOwned': winner != null ? g.playerProperties(winner.id).length : 0,
       'tradesCompleted': _totalTrades,
-      'auctionsWon': _totalAuctionsWon,
+      'auctionsWon': 0,
       'diceRolled': _totalDiceRolled,
       'finalNetWorth': winner != null ? g.netWorth(winner.id) : 0,
       'playedAt': DateTime.now().millisecondsSinceEpoch,

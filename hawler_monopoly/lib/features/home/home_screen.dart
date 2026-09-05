@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,8 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/widgets.dart';
+import '../../data/online/chat_repository.dart';
+import '../../domain/models/chat_models.dart';
 import '../../presentation/providers.dart';
 import '../lobby/lobby_screen.dart';
 import '../shop/shop_screen.dart';
@@ -28,6 +32,22 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _navIndex = 0;
+  List<FriendProfile> _friends = [];
+  StreamSubscription<List<FriendProfile>>? _friendsSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _friendsSub = ChatRepository.instance.watchFriends().listen((f) {
+      if (mounted) setState(() => _friends = f);
+    });
+  }
+
+  @override
+  void dispose() {
+    _friendsSub?.cancel();
+    super.dispose();
+  }
 
   void _push(Widget screen) {
     Navigator.of(context).push(
@@ -64,7 +84,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         const SizedBox(height: 24),
                         FadeInUp(delay: const Duration(milliseconds: 100), child: _playCta()),
                         const SizedBox(height: 28),
-                        SectionHeader(title: 'دەستپێکی خێرا'),
+                        const SectionHeader(title: 'دەستپێکی خێرا'),
                         const SizedBox(height: 14),
                         FadeInUp(delay: const Duration(milliseconds: 150), child: _quickGrid()),
                         const SizedBox(height: 28),
@@ -279,36 +299,78 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _friendsRow() {
+    if (_friends.isEmpty) {
+      return GlassContainer(
+        borderRadius: 18,
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        child: Row(
+          children: [
+            const Icon(Icons.person_add_outlined, color: AppColors.gold, size: 28),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('هیچ هاوڕێیەکت نییە هێشتا', style: AppTextStyles.titleMedium),
+                  const SizedBox(height: 4),
+                  Text('هاوڕێ زیاد بکە بۆ یاریکردن پێکەوە', style: AppTextStyles.bodySoft),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _push(const FriendsScreen()),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: AppColors.goldGradient,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text('زیادکردن', style: AppTextStyles.caption.copyWith(color: AppColors.night, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return SizedBox(
       height: 96,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: 6,
+        itemCount: _friends.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (context, i) {
-          return Column(
-            children: [
-              Stack(
-                children: [
-                  const AvatarRing(size: 56, initials: 'ک', level: 8),
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: i % 2 == 0 ? AppColors.success : Colors.grey,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.night, width: 2),
+          final f = _friends[i];
+          final initials = f.name.isNotEmpty ? f.name.substring(0, 1) : '?';
+          return GestureDetector(
+            onTap: () => _push(const FriendsScreen()),
+            child: Column(
+              children: [
+                Stack(
+                  children: [
+                    AvatarRing(size: 56, initials: initials, level: f.level),
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: f.status == FriendOnlineStatus.online ? AppColors.success : Colors.grey,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.night, width: 2),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text('کاوە', style: AppTextStyles.caption),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  f.name.length > 8 ? '${f.name.substring(0, 7)}…' : f.name,
+                  style: AppTextStyles.caption,
+                ),
+              ],
+            ),
           );
         },
       ),

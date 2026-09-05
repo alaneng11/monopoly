@@ -531,7 +531,7 @@ class GameEngine {
     final players = s2.players.map((pl) => pl.id == playerId ? pl.copyWith(propertiesOwned: pl.propertiesOwned + 1) : pl).toList();
     log.add('${cur.name} کڕی «${def.name}» بە $price. 🏠');
     // زیادکردنی ئێرژی بۆ هەر خانەیەکی نوێ
-    final bonusEnergy = 1;
+    const bonusEnergy = 1;
     final newEnergy = (s2.diceEnergy + bonusEnergy).clamp(0, s2.maxDiceEnergy);
     return GameResult.ok(s2.copyWith(tiles: tiles, players: players, phase: GamePhase.endTurn, diceEnergy: newEnergy));
   }

@@ -4,6 +4,14 @@
 
 const jwt = require('jsonwebtoken');
 
+// In production a real secret is mandatory — falling back to a hardcoded
+// string there would let anyone mint valid tokens for any account.
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error(
+    'JWT_SECRET is required when NODE_ENV=production. ' +
+    'Set it in the Railway service variables (32+ random characters).'
+  );
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'hawler-monopoly-dev-secret-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 

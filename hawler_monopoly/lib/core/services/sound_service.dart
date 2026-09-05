@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import 'audio_stub.dart' if (dart.library.js_interop) 'audio_web.dart' as audio;
+
 /// خزمەتگوزاری دەنگ و لەرین — سینگڵتۆن.
 /// لەبەر بوونی فلاتەر وێب (Chrome) بێ پشتگیری AudioPlayer، ئێمە
 /// HapticFeedback بۆ لەرین بەکار دەهێنین و پۆکەی دەنگ لەناو
@@ -80,8 +82,18 @@ class SoundService {
   }
 
   // ── Low-level Web Audio API ───────────────────────────────
+  //
+  // ئیمپلیمێنتەیشنەکە لە `audio_web.dart` (وێب) یان `audio_stub.dart`
+  // (پلاتفۆرمەکانی تر) دێت بە ڕێگەی conditional import.
 
-  static bool _audioSupported = true;
+  bool get isAudioSupported => audio.audioSupported;
+
+  /// دەبێت دوای یەکەم کرتەی بەکارهێنەر بانگ بکرێت — وێبگەڕەکان
+  /// AudioContext ڕادەگرن تا ئەو کاتە.
+  void unlockAudio() {
+    if (!_soundEnabled) return;
+    audio.resumeAudio();
+  }
 
   void _playTone({
     required double frequency,
@@ -89,68 +101,17 @@ class SoundService {
     double gain = 0.25,
     String type = 'sine',
   }) {
-    if (!_audioSupported) return;
-    try {
-      // Use dart:js to call WebAudio on Chrome/web
-      // On non-web platforms this will be a no-op
-      // ignore: undefined_prefixed_name
-      _webPlayTone(frequency, durationMs, gain, type);
-    } catch (_) {
-      _audioSupported = false;
-    }
+    audio.playTone(
+      frequency: frequency,
+      durationMs: durationMs,
+      gain: gain,
+      type: type,
+    );
   }
 
   void _playChord(List<double> freqs, {int durationMs = 200}) {
-    if (!_audioSupported) return;
     for (final f in freqs) {
       _playTone(frequency: f, durationMs: durationMs, gain: 0.18, type: 'sine');
     }
-  }
-
-  /// دروستکردنی AudioContext لەرێگای js.context (فلاتەر وێب هەستێبدات)
-  void _webPlayTone(double freq, int ms, double gainVal, String waveType) {
-    // This is a web-only JS interop call. On native it's a no-op.
-    try {
-      // ignore: avoid_dynamic_calls
-      final js = _getJs();
-      if (js == null) return;
-      js.callMethod('eval', ['''
-        (function() {
-          try {
-            var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            var osc = ctx.createOscillator();
-            var g = ctx.createGain();
-            osc.type = '$waveType';
-            osc.frequency.value = $freq;
-            g.gain.setValueAtTime($gainVal, ctx.currentTime);
-            g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + ${ms / 1000.0});
-            osc.connect(g);
-            g.connect(ctx.destination);
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + ${ms / 1000.0});
-          } catch(e) {}
-        })();
-      ''']);
-    } catch (_) {
-      _audioSupported = false;
-    }
-  }
-
-  // ignore: unused_element
-  dynamic _getJs() {
-    try {
-      // ignore: invalid_null_aware_expression
-      return _JsProxy.context;
-    } catch (_) {
-      return null;
-    }
-  }
-}
-
-// ── JS Context proxy — only works in flutter web ─────────────
-class _JsProxy {
-  static dynamic get context {
-    // This will throw on non-web targets, caught by caller
-    throw UnsupportedError('JS not available on this platform');
   }
 }
