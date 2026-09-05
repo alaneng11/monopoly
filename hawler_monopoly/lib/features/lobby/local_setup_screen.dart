@@ -315,7 +315,7 @@ class _LocalSetupScreenState extends ConsumerState<LocalSetupScreen> {
                         border: Border.all(color: selected ? AppColors.goldBright : AppColors.glassBorder, width: selected ? 2 : 1),
                       ),
                       child: Center(
-                        child: Text(ch.emoji, style: const TextStyle(fontSize: 20)),
+                        child: Icon(ch.icon, size: 20, color: Colors.white),
                       ),
                     ),
                   ),

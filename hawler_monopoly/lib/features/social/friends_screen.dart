@@ -173,7 +173,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
               children: [
                 PlayerToken(
                   color: isOnline ? AppColors.emerald : AppColors.glassBorder,
-                  emoji: '👤',
+                  icon: Icons.person,
                   size: 40,
                   isActive: isOnline,
                 ),
@@ -305,7 +305,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                   children: [
                     CircleIconButton(icon: Icons.arrow_forward, onTap: () => Navigator.pop(context)),
                     const SizedBox(width: 12),
-                    PlayerToken(color: AppColors.emerald, emoji: '👤', size: 32),
+                    const PlayerToken(color: AppColors.emerald, icon: Icons.person, size: 32),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(

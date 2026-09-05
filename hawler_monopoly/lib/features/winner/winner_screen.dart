@@ -83,7 +83,7 @@ class _WinnerScreenState extends ConsumerState<WinnerScreen> {
                         child: CircleAvatar(
                           radius: 58,
                           backgroundColor: winner.color,
-                          child: Text(winner.character.emoji, style: const TextStyle(fontSize: 52)),
+                          child: Icon(winner.character.icon, size: 52, color: Colors.white),
                         ),
                       ),
                     ),

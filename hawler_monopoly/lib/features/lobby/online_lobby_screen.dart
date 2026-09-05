@@ -57,7 +57,7 @@ class _OnlineLobbyScreenState extends ConsumerState<OnlineLobbyScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) => Container(
+        builder: (modalCtx, setModalState) => Container(
           padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 24),
           decoration: BoxDecoration(
             gradient: AppColors.royalBackground,
@@ -109,7 +109,7 @@ class _OnlineLobbyScreenState extends ConsumerState<OnlineLobbyScreen> {
                     const Spacer(),
                     Switch(
                       value: isPublic,
-                      activeColor: AppColors.gold,
+                      activeThumbColor: AppColors.gold,
                       onChanged: (v) => setModalState(() => isPublic = v),
                     ),
                   ],

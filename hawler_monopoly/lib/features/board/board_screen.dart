@@ -505,7 +505,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
             top: row * cell + cell * 0.38 + dy,
             child: PlayerToken(
               color: p.color,
-              emoji: p.character.emoji,
+              icon: p.character.icon,
               size: cell * 0.42,
               isActive: isActive,
             ),
@@ -724,7 +724,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> with TickerProviderSt
           children: [
             Row(
               children: [
-                PlayerToken(color: p.color, emoji: p.character.emoji, size: 40),
+                PlayerToken(color: p.color, icon: p.character.icon, size: 40),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(

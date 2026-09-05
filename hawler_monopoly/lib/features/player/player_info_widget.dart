@@ -67,7 +67,7 @@ class _PlayerChip extends StatelessWidget {
                 children: [
                   PlayerToken(
                     color: player.color,
-                    emoji: player.character.emoji,
+                    icon: player.character.icon,
                     size: 30,
                     isActive: isActive,
                   ),

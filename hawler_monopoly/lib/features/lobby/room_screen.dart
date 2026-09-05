@@ -289,9 +289,10 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                                               ),
                                             ),
                                             alignment: Alignment.center,
-                                            child: Text(
-                                              TokenCharacter.byId(p.characterId).emoji,
-                                              style: const TextStyle(fontSize: 20),
+                                            child: Icon(
+                                              TokenCharacter.byId(p.characterId).icon,
+                                              size: 20,
+                                              color: Colors.white,
                                             ),
                                           ),
                                           Positioned(

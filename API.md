@@ -60,8 +60,9 @@ Complete reference for all REST endpoints and WebSocket real-time event messages
 | `POST` | `/api/rooms/:code/leave` | **Yes** | Leave room / forfeit active game |
 | `POST` | `/api/games/:code/roll` | **Yes** | Authoritative dice roll (validates turn and energy) |
 | `POST` | `/api/games/:code/move` | **Yes** | Step movement execution |
-| `POST` | `/api/games/:code/resolve` | **Yes** | Landing tile action resolution (salary, tax, jail) |
+| `POST` | `/api/games/:code/resolve` | **Yes** | Landing tile action resolution (salary, tax, jail, chance/event card). Returns the drawn `card` when one applies. |
 | `POST` | `/api/games/:code/buy` | **Yes** | Buy unowned property |
+| `POST` | `/api/games/:code/decline` | **Yes** | Decline the property you landed on — opens an auction, or ends the turn if nobody else can bid |
 | `POST` | `/api/games/:code/upgrade` | **Yes** | Upgrade property house/hotel `{ tileIndex }` |
 | `POST` | `/api/games/:code/mortgage` | **Yes** | Mortgage property for 50% cash `{ tileIndex }` |
 | `POST` | `/api/games/:code/unmortgage` | **Yes** | Unmortgage property for 50% + 10% fee `{ tileIndex }` |
@@ -128,7 +129,8 @@ Complete reference for all REST endpoints and WebSocket real-time event messages
 - `game_started` — Game initialized with board state
 - `dice_rolled` — Live dice values broadcast to all clients
 - `player_moved` — Position change broadcast
-- `landing_resolved` — Landing outcome (buy prompt, rent paid, tax deduction)
+- `landing_resolved` — Landing outcome (buy prompt, rent paid, tax deduction, card drawn)
+- `purchase_declined` — Player declined a property; an auction may have opened
 - `property_bought` / `property_upgraded` / `property_mortgaged` — Property state changes
 - `auction_updated` — New high bid or time extension
 - `trade_updated` / `trade_resolved` — Trade offer updates

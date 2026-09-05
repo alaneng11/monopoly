@@ -213,7 +213,7 @@ void main() {
       var tiles = Map<int, TileState>.of(s.tiles);
       tiles[1] = const TileState(tileIndex: 1, ownerId: 'b');
       s = s.copyWith(tiles: tiles);
-      final offer = TradeOffer(id: 't2', fromPlayerId: 'a', toPlayerId: 'b', tilesFrom: [1]);
+      const offer = TradeOffer(id: 't2', fromPlayerId: 'a', toPlayerId: 'b', tilesFrom: [1]);
       final p = engine.proposeTrade(s, offer);
       expect(p.isError, isTrue);
     });
@@ -255,6 +255,64 @@ void main() {
       );
       final bid = engine.placeBid(s, 'b', 45);
       expect(bid.isError, isTrue);
+    });
+  });
+
+  group('GameEngine — پەرەوبوون و کۆتایی یاری', () {
+    GameState twoPlayers({int cashA = 1500, int cashB = 1500}) {
+      final r = GameEngine().createGame(board: HawlerBoard.build(), setups: const [
+        PlayerSetup(id: 'a', name: 'A', characterId: 'business'),
+        PlayerSetup(id: 'b', name: 'B', characterId: 'doctor'),
+      ]);
+      var s = r.state!;
+      s = s.copyWith(players: [
+        s.players[0].copyWith(cash: cashA),
+        s.players[1].copyWith(cash: cashB),
+      ]);
+      return s;
+    }
+
+    test('کرێی زۆرتر لە دراوی یاریزان → پەرەوبوون و دیاریکردنی براوە', () {
+      final engine = GameEngine();
+      // B خاوەنی خانەیەکی گران، A دراوی کەمە و لەسەری دادەنیشێت.
+      var s = twoPlayers(cashA: 5, cashB: 1500);
+      const tileIndex = 39; // گرانترین خانە
+      final tiles = Map<int, TileState>.from(s.tiles);
+      tiles[tileIndex] = const TileState(tileIndex: tileIndex, ownerId: 'b', level: 3);
+      s = s.copyWith(
+        tiles: tiles,
+        players: [s.players[0].copyWith(position: tileIndex), s.players[1]],
+        phase: GamePhase.landing,
+      );
+
+      final res = engine.resolveLanding(s, 'a');
+      expect(res.isOk, isTrue);
+      final after = res.state!;
+
+      final a = after.playerById('a')!;
+      expect(a.bankrupt, isTrue, reason: 'یاریزانی بێ دراو دەبێت پەرەو ببێت');
+      expect(a.cash, greaterThanOrEqualTo(0), reason: 'دراو نابێت ببێتە ژمارەی نەرێنی');
+      expect(after.phase, GamePhase.gameOver);
+      expect(after.winnerId, 'b');
+    });
+
+    test('دراوی تەواو → کرێ دەدرێت و یاری بەردەوام دەبێت', () {
+      final engine = GameEngine();
+      var s = twoPlayers(cashA: 1500, cashB: 1500);
+      const tileIndex = 39;
+      final tiles = Map<int, TileState>.from(s.tiles);
+      tiles[tileIndex] = const TileState(tileIndex: tileIndex, ownerId: 'b');
+      s = s.copyWith(
+        tiles: tiles,
+        players: [s.players[0].copyWith(position: tileIndex), s.players[1]],
+        phase: GamePhase.landing,
+      );
+
+      final after = engine.resolveLanding(s, 'a').state!;
+      expect(after.playerById('a')!.bankrupt, isFalse);
+      expect(after.playerById('a')!.cash, lessThan(1500));
+      expect(after.playerById('b')!.cash, greaterThan(1500));
+      expect(after.phase, isNot(GamePhase.gameOver));
     });
   });
 

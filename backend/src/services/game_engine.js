@@ -7,6 +7,7 @@
 
 const { query, queryOne, run, transaction } = require('../models/database');
 const { generateId, validateDice } = require('../utils/validation');
+const { drawCard } = require('./cards');
 
 // ── Board Definition (40 tiles) ─────────────────────────────
 
@@ -44,6 +45,99 @@ function computeRent(tile, level, eventMult = 1.0) {
   const base = tile.rentByLevel?.[level] || tile.rentByLevel?.[0] || 0;
   const monopolyBonus = level === 0 ? 1 : 1;
   return Math.round(base * monopolyBonus * eventMult);
+}
+
+/** Net worth = cash + (unmortgaged deed value) + (building value). Used for
+ *  bankruptcy settlement and for deciding a winner on a turn-limit finish. */
+function netWorth(player, props) {
+  let total = player.cash || 0;
+  for (const p of props) {
+    if (p.owner_id !== player.id) continue;
+    const tile = BOARD[p.tile_index];
+    if (!tile) continue;
+    if (!p.mortgaged) total += tile.price || 0;
+    total += (p.level || 0) * Math.round((tile.upgradeCost || 0) / 2);
+  }
+  return total;
+}
+
+/**
+ * Settle a debt the payer may not be able to afford.
+ *
+ * Returns `{ players, bankrupted }`. When the payer cannot cover `amount`
+ * they hand over everything they have — cash plus deeds — to `creditorId`
+ * (or to the bank, which frees the deeds) and are marked bankrupt.
+ */
+async function settleDebt(db, roomCode, players, payerId, creditorId, amount, reason) {
+  const payer = players.find(p => p.id === payerId);
+  if (!payer) return { players, bankrupted: false };
+
+  const toBank = !creditorId || creditorId === 'bank';
+
+  if ((payer.cash || 0) >= amount) {
+    const updated = players.map(p => {
+      if (p.id === payerId) return { ...p, cash: p.cash - amount };
+      if (!toBank && p.id === creditorId) return { ...p, cash: (p.cash || 0) + amount };
+      return p;
+    });
+    await db.run(
+      'INSERT INTO transactions (room_code, from_id, to_id, amount, reason) VALUES ($1,$2,$3,$4,$5)',
+      [roomCode, payerId, toBank ? 'bank' : creditorId, amount, reason]
+    );
+    return { players: updated, bankrupted: false };
+  }
+
+  // ── Insufficient funds → bankruptcy ──
+  const remaining = payer.cash || 0;
+  const deeds = await db.query('SELECT * FROM properties WHERE room_code = $1 AND owner_id = $2', [roomCode, payerId]);
+
+  if (toBank) {
+    // Deeds return to the bank and become buyable again.
+    await db.run('DELETE FROM properties WHERE room_code = $1 AND owner_id = $2', [roomCode, payerId]);
+  } else {
+    await db.run('UPDATE properties SET owner_id = $1 WHERE room_code = $2 AND owner_id = $3', [creditorId, roomCode, payerId]);
+  }
+
+  const updated = players.map(p => {
+    if (p.id === payerId) return { ...p, cash: 0, bankrupt: true, properties_owned: 0, in_jail: false, jail_turns: 0 };
+    if (!toBank && p.id === creditorId) {
+      return { ...p, cash: (p.cash || 0) + remaining, properties_owned: (p.properties_owned || 0) + deeds.length };
+    }
+    return p;
+  });
+
+  if (remaining > 0) {
+    await db.run(
+      'INSERT INTO transactions (room_code, from_id, to_id, amount, reason) VALUES ($1,$2,$3,$4,$5)',
+      [roomCode, payerId, toBank ? 'bank' : creditorId, remaining, reason]
+    );
+  }
+  await db.run(
+    'INSERT INTO transactions (room_code, from_id, to_id, amount, reason, metadata) VALUES ($1,$2,$3,$4,$5,$6)',
+    [roomCode, payerId, toBank ? 'bank' : creditorId, 0, 'bankruptcy', JSON.stringify({ deeds: deeds.length })]
+  );
+
+  return { players: updated, bankrupted: true };
+}
+
+/**
+ * Persist `players` and, if only one player is left standing, close the game
+ * out properly (phase, winner, match history, rewards). Returns the phase
+ * that was written so callers can hand it back to the client.
+ */
+async function commitPlayers(db, roomCode, players, phase, extra = {}) {
+  const alive = players.filter(p => !p.bankrupt);
+  const isOver = alive.length <= 1;
+  const finalPhase = isOver ? 'gameOver' : phase;
+
+  await db.run(
+    'UPDATE game_states SET players = $1, phase = $2, winner_id = $3, state_version = state_version + 1, updated_at = $4 WHERE room_code = $5',
+    [JSON.stringify(players), finalPhase, isOver ? (alive[0]?.id || '') : '', now(), roomCode]
+  );
+
+  if (isOver) await finalizeGame(db, roomCode, alive[0]?.id || '', players);
+
+  return { phase: finalPhase, gameOver: isOver, winnerId: isOver ? alive[0]?.id : undefined, ...extra };
 }
 
 // ── Roll Dice ───────────────────────────────────────────────
@@ -190,10 +284,14 @@ async function buyProperty(roomCode, userId) {
       [roomCode, tileIdx, userId]
     );
 
-    // Update game state
+    // Update game state.
+    // NOTE: energy is clamped in JS rather than with SQL LEAST() — LEAST is
+    // PostgreSQL-only and does not exist in SQLite, which silently rolled the
+    // whole purchase back on local dev.
+    const energy = Math.min((gs.dice_energy || 0) + 1, gs.max_dice_energy || 10);
     await db.run(
-      'UPDATE game_states SET players = $1, phase = $2, dice_energy = LEAST(dice_energy + 1, max_dice_energy), state_version = state_version + 1, updated_at = $3 WHERE room_code = $4',
-      [JSON.stringify(updatedPlayers), 'endTurn', now(), roomCode]
+      'UPDATE game_states SET players = $1, phase = $2, dice_energy = $3, state_version = state_version + 1, updated_at = $4 WHERE room_code = $5',
+      [JSON.stringify(updatedPlayers), 'endTurn', energy, now(), roomCode]
     );
 
 
@@ -210,6 +308,51 @@ async function buyProperty(roomCode, userId) {
     );
 
     return { tileIndex: tileIdx, price, name: tile.name };
+  });
+}
+
+/**
+ * Decline to buy the property you landed on.
+ *
+ * Without this the client's only option was `end-turn`, which the server
+ * rejected from `propertyDecision` — leaving the game frozen. Declining now
+ * opens the property to auction (standard Monopoly), or just ends the turn if
+ * nobody else is left to bid.
+ */
+async function declinePurchase(roomCode, userId) {
+  return transaction(async (db) => {
+    const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
+    if (!gs) throw { code: 'NO_GAME', message: 'یاری نەدۆزرایەوە.' };
+    if (gs.phase !== 'propertyDecision') throw { code: 'BAD_PHASE', message: 'دۆخی بڕیار چالاک نییە.' };
+
+    const current = gs.players[gs.current_player_index];
+    if (!current || current.id !== userId) throw { code: 'WRONG_TURN', message: 'نەک ئێستای تۆ.' };
+
+    const tileIdx = current.position;
+    const tile = BOARD[tileIdx];
+    const contenders = gs.players.filter(p => !p.bankrupt);
+
+    if (!tile || !tile.isBuyable || contenders.length < 2) {
+      await db.run(
+        'UPDATE game_states SET phase = $1, state_version = state_version + 1, updated_at = $2 WHERE room_code = $3',
+        ['endTurn', now(), roomCode]
+      );
+      return { phase: 'endTurn', auctioned: false };
+    }
+
+    const auctionData = {
+      tileIndex: tileIdx,
+      highestBid: Math.max(10, Math.round((tile.price || 100) * 0.5)),
+      highestBidderId: null,
+      passedBidders: [],
+      endsAt: now() + 20,
+      basePrice: Math.max(10, Math.round((tile.price || 100) * 0.5)),
+    };
+    await db.run(
+      'UPDATE game_states SET phase = $1, auction = $2, state_version = state_version + 1, updated_at = $3 WHERE room_code = $4',
+      ['auctioning', JSON.stringify(auctionData), now(), roomCode]
+    );
+    return { phase: 'auctioning', auctioned: true, auction: auctionData };
   });
 }
 
@@ -273,13 +416,17 @@ async function endTurn(roomCode, userId) {
     // Regenerate energy
     let energy = Math.min(gs.dice_energy + (gs.energy_regen_rate || 1), gs.max_dice_energy || 10);
 
-    // Doubles = extra turn
+    // Doubles = extra turn.
+    // The phase MUST go back to 'awaitingRoll' here — leaving it at 'endTurn'
+    // meant the player could neither roll (roll requires awaitingRoll) nor end
+    // their turn again, freezing the game on every doubles throw.
     if ((current.doubles_in_a_row || 0) > 0 && !current.in_jail && !current.bankrupt) {
       await db.run(
-        'UPDATE game_states SET dice_energy = $1, dice_multiplier = 1, state_version = state_version + 1, updated_at = $2 WHERE room_code = $3',
+        `UPDATE game_states SET phase = 'awaitingRoll', dice_energy = $1, dice_multiplier = 1,
+         turn_started_at = $2, state_version = state_version + 1, updated_at = $2 WHERE room_code = $3`,
         [energy, now(), roomCode]
       );
-      return { extraTurn: true, nextPlayerIndex: gs.current_player_index };
+      return { extraTurn: true, phase: 'awaitingRoll', nextPlayerIndex: gs.current_player_index };
     }
 
     // Advance to next player
@@ -293,6 +440,7 @@ async function endTurn(roomCode, userId) {
         'UPDATE game_states SET phase = $1, winner_id = $2, state_version = state_version + 1, updated_at = $3 WHERE room_code = $4',
         ['gameOver', alive[0]?.id || '', now(), roomCode]
       );
+      await finalizeGame(db, roomCode, alive[0]?.id || '', players);
       return { gameOver: true, winnerId: alive[0]?.id };
     }
 
@@ -369,6 +517,21 @@ async function resolveLanding(roomCode, userId) {
     const current = gs.players[gs.current_player_index];
     if (!current || current.id !== userId) throw { code: 'WRONG_TURN', message: 'نەک ئێستای تۆ.' };
 
+    return await resolveTileFor(db, roomCode, gs, userId, 0);
+  });
+}
+
+/**
+ * Resolve whatever the player is standing on.
+ *
+ * `depth` guards the one case that can chain: a chance card that moves the
+ * player onto another tile, which must then be resolved too. Capped at 2 hops
+ * so a pathological deck can never spin.
+ */
+async function resolveTileFor(db, roomCode, gs, userId, depth) {
+    const current = gs.players.find(p => p.id === userId);
+    if (!current) return { phase: 'endTurn' };
+
     const tileIdx = current.position;
     const tile = BOARD[tileIdx];
     if (!tile) return { phase: 'endTurn' };
@@ -395,25 +558,37 @@ async function resolveLanding(roomCode, userId) {
     // Tax
     if (tile.type === 'tax') {
       const tax = tile.taxAmount || 200;
-      if (current.cash < tax) {
-        // Bankruptcy handling would go here
-        await db.run('UPDATE game_states SET phase = $1, updated_at = $2 WHERE room_code = $3', ['endTurn', now(), roomCode]);
-        return { phase: 'endTurn', tax };
-      }
-      const updatedPlayers = gs.players.map(p =>
-        p.id === userId ? { ...p, cash: p.cash - tax } : p
-      );
-      await db.run('UPDATE game_states SET players = $1, phase = $2, updated_at = $3 WHERE room_code = $4',
-        [JSON.stringify(updatedPlayers), 'endTurn', now(), roomCode]);
-      await db.run('INSERT INTO transactions (room_code, from_id, to_id, amount, reason) VALUES ($1,$2,$3,$4,$5)',
-        [roomCode, userId, 'bank', tax, 'tax']);
-      return { phase: 'endTurn', tax };
+      const settled = await settleDebt(db, roomCode, gs.players, userId, 'bank', tax, 'tax');
+      return await commitPlayers(db, roomCode, settled.players, 'endTurn', {
+        tax, bankrupted: settled.bankrupted,
+      });
     }
 
-    // Chance / Event cards
+    // Chance / Event cards — drawn AND applied here. Previously this only set
+    // phase='cardEvent' with no way out, which froze the game permanently.
     if (tile.type === 'chance' || tile.type === 'event') {
-      await db.run('UPDATE game_states SET phase = $1, updated_at = $2 WHERE room_code = $3', ['cardEvent', now(), roomCode]);
-      return { phase: 'cardEvent', tileIndex: tileIdx, type: tile.type };
+      const card = drawCard(tile.type);
+      const applied = await applyCard(db, roomCode, gs, userId, card);
+      gs.players = applied.players;
+
+      // A card that moved the player means the destination still needs
+      // resolving (rent, purchase decision, ...).
+      if (applied.moved && depth < 2) {
+        await db.run(
+          'UPDATE game_states SET players = $1, active_event = $2, updated_at = $3 WHERE room_code = $4',
+          [JSON.stringify(gs.players), JSON.stringify(card), now(), roomCode]
+        );
+        const next = await resolveTileFor(db, roomCode, gs, userId, depth + 1);
+        return { ...next, card, tileIndex: tileIdx, movedTo: applied.position };
+      }
+
+      await db.run(
+        'UPDATE game_states SET active_event = $1, updated_at = $2 WHERE room_code = $3',
+        [JSON.stringify(card), now(), roomCode]
+      );
+      return await commitPlayers(db, roomCode, gs.players, 'endTurn', {
+        card, tileIndex: tileIdx, bankrupted: applied.bankrupted,
+      });
     }
 
     // Property / Station
@@ -455,17 +630,10 @@ async function resolveLanding(roomCode, userId) {
         return { phase: 'endTurn' };
       }
 
-      const updatedPlayers = gs.players.map(p => {
-        if (p.id === userId) return { ...p, cash: p.cash - rent };
-        if (p.id === prop.owner_id) return { ...p, cash: p.cash + rent };
-        return p;
-      });
-
-      await db.run('UPDATE game_states SET players = $1, phase = $2, updated_at = $3 WHERE room_code = $4',
-        [JSON.stringify(updatedPlayers), 'endTurn', now(), roomCode]);
-
-      await db.run('INSERT INTO transactions (room_code, from_id, to_id, amount, reason, metadata) VALUES ($1,$2,$3,$4,$5,$6)',
-        [roomCode, userId, prop.owner_id, rent, 'rent', JSON.stringify({ tile_index: tileIdx })]);
+      // Rent may exceed what the payer holds — settleDebt hands the landlord
+      // everything they have and marks them bankrupt rather than letting cash
+      // go negative.
+      const settled = await settleDebt(db, roomCode, gs.players, userId, prop.owner_id, rent, 'rent');
 
       // Update rent collected stat
       await db.run(
@@ -473,12 +641,99 @@ async function resolveLanding(roomCode, userId) {
         [rent, prop.owner_id]
       ).catch(() => {});
 
-      return { phase: 'endTurn', rent, paidTo: prop.owner_id };
+      return await commitPlayers(db, roomCode, settled.players, 'endTurn', {
+        rent, paidTo: prop.owner_id, bankrupted: settled.bankrupted,
+      });
     }
 
     await db.run('UPDATE game_states SET phase = $1, updated_at = $2 WHERE room_code = $3', ['endTurn', now(), roomCode]);
     return { phase: 'endTurn' };
-  });
+}
+
+/**
+ * Apply a drawn card's effect to `userId`.
+ * Returns `{ players, moved, position, bankrupted }` — `moved` tells the caller
+ * the destination tile still needs resolving.
+ */
+async function applyCard(db, roomCode, gs, userId, card) {
+  let players = gs.players;
+  const me = players.find(p => p.id === userId);
+  if (!me) return { players, moved: false, bankrupted: false };
+
+  const amount = card.amount || 0;
+  const setMe = (patch) => players.map(p => (p.id === userId ? { ...p, ...patch } : p));
+
+  const moveTo = async (target) => {
+    const from = me.position || 0;
+    const passedStart = target < from || target === 0;
+    let cash = me.cash || 0;
+    if (passedStart && target !== from) {
+      cash += 200;
+      await db.run(
+        'INSERT INTO transactions (room_code, from_id, to_id, amount, reason) VALUES ($1,$2,$3,$4,$5)',
+        [roomCode, 'bank', userId, 200, 'salary']
+      );
+    }
+    players = players.map(p => (p.id === userId ? { ...p, position: target, cash } : p));
+    return { players, moved: true, position: target, bankrupted: false };
+  };
+
+  switch (card.effect) {
+    case 'gainMoney': {
+      if (amount > 0) {
+        players = setMe({ cash: (me.cash || 0) + amount });
+        await db.run(
+          'INSERT INTO transactions (room_code, from_id, to_id, amount, reason) VALUES ($1,$2,$3,$4,$5)',
+          [roomCode, 'bank', userId, amount, 'card']
+        );
+      }
+      return { players, moved: false, bankrupted: false };
+    }
+
+    case 'loseMoney': {
+      if (amount <= 0) return { players, moved: false, bankrupted: false };
+      const s = await settleDebt(db, roomCode, players, userId, 'bank', amount, 'card');
+      return { players: s.players, moved: false, bankrupted: s.bankrupted };
+    }
+
+    case 'moveTo':
+      return await moveTo(((card.targetTileIndex ?? 0) + 40) % 40);
+
+    case 'moveBy':
+      return await moveTo((((me.position || 0) + amount) % 40 + 40) % 40);
+
+    case 'goToJail':
+      players = setMe({ in_jail: true, jail_turns: 0, position: 10, doubles_in_a_row: 0 });
+      return { players, moved: false, bankrupted: false };
+
+    case 'getOutOfJail':
+      players = setMe({ jail_free_cards: (me.jail_free_cards || 0) + 1 });
+      return { players, moved: false, bankrupted: false };
+
+    case 'repairAll': {
+      const deeds = await db.query('SELECT * FROM properties WHERE room_code = $1 AND owner_id = $2', [roomCode, userId]);
+      const levels = deeds.reduce((sum, d) => sum + (d.level || 0), 0);
+      const bill = levels * amount;
+      if (bill <= 0) return { players, moved: false, bankrupted: false };
+      const s = await settleDebt(db, roomCode, players, userId, 'bank', bill, 'card_repair');
+      return { players: s.players, moved: false, bankrupted: s.bankrupted };
+    }
+
+    case 'collectFromAll': {
+      // Each opponent pays `amount`; anyone who cannot afford it goes bankrupt
+      // to the card holder.
+      let bankrupted = false;
+      for (const other of players.filter(p => p.id !== userId && !p.bankrupt)) {
+        const s = await settleDebt(db, roomCode, players, other.id, userId, amount, 'card_gift');
+        players = s.players;
+        bankrupted = bankrupted || s.bankrupted;
+      }
+      return { players, moved: false, bankrupted };
+    }
+
+    default:
+      return { players, moved: false, bankrupted: false };
+  }
 }
 
 // ── Auction System ──────────────────────────────────────────
@@ -798,11 +1053,25 @@ async function unmortgageProperty(roomCode, userId, tileIndex) {
 
 // ── Match Finish & History ──────────────────────────────────
 
+/** Public entry point — opens its own transaction. */
 async function finishGame(roomCode, winnerId) {
-  return transaction(async (db) => {
+  return transaction(async (db) => finalizeGame(db, roomCode, winnerId));
+}
+
+/**
+ * Close a finished game out: match history, winner/loser stats and rewards,
+ * room status. Runs inside an existing transaction (`db`), so it is safe to
+ * call from the engine at the moment the last opponent goes bankrupt.
+ *
+ * Idempotent — a room that is already `closed` is skipped, so a double
+ * game-over (e.g. scheduler and player action racing) writes one match row.
+ */
+async function finalizeGame(db, roomCode, winnerId, playersOverride) {
     const room = await db.queryOne('SELECT * FROM game_rooms WHERE code = $1', [roomCode]);
     const gs = parseState(await db.queryOne('SELECT * FROM game_states WHERE room_code = $1', [roomCode]));
     if (!room || !gs) return null;
+    if (room.status === 'closed') return { finished: true, winnerId, alreadyFinished: true };
+    if (playersOverride) gs.players = playersOverride;
 
     const winner = gs.players.find(p => p.id === winnerId);
     const duration = room.started_at ? (now() - room.started_at) : 300;
@@ -854,7 +1123,6 @@ async function finishGame(roomCode, winnerId) {
     await db.run('UPDATE game_rooms SET status = $1, finished_at = $2 WHERE code = $3', ['closed', now(), roomCode]);
 
     return { finished: true, winnerId, duration };
-  });
 }
 
 // ── Turn Timer Scheduler ─────────────────────────────────────
@@ -873,7 +1141,7 @@ async function _checkStalledTurns(broadcastToRoom) {
        FROM game_states gs
        JOIN game_rooms gr ON gs.room_code = gr.code
        WHERE gr.status = 'active'
-         AND gs.phase IN ('awaitingRoll', 'endTurn')
+         AND gs.phase IN ('awaitingRoll', 'endTurn', 'propertyDecision', 'auctioning', 'landing', 'cardEvent', 'trading')
          AND gs.turn_started_at IS NOT NULL
          AND gs.turn_started_at < $1`,
       [threshold]
@@ -916,14 +1184,34 @@ async function _checkStalledTurns(broadcastToRoom) {
           );
           const state = await getState(code);
           broadcastToRoom(code, { type: 'turn_timeout_advance', state, timedOut: current.id });
-        } else if (row.phase === 'endTurn') {
+        } else if (row.phase === 'propertyDecision') {
+          // Stalled on a buy decision — treat it as a decline (goes to auction,
+          // or straight to endTurn when there is nobody else to bid).
+          await declinePurchase(code, current.id).catch(() => {});
+          const state = await getState(code);
+          broadcastToRoom(code, { type: 'turn_timeout_advance', state, timedOut: current.id });
+        } else if (row.phase === 'auctioning') {
+          // Nobody is bidding — award to the current high bidder (or nobody).
+          await resolveAuction(code).catch(() => {});
+          const state = await getState(code);
+          broadcastToRoom(code, { type: 'turn_timeout_advance', state, timedOut: current.id });
+        } else if (row.phase === 'landing' || row.phase === 'cardEvent') {
+          // Client dropped between move and resolve — finish the landing for it.
+          await resolveLanding(code, current.id).catch(async () => {
+            await run(
+              `UPDATE game_states SET phase = 'endTurn', state_version = state_version + 1,
+               updated_at = $1 WHERE room_code = $2`, [now(), code]);
+          });
+          const state = await getState(code);
+          broadcastToRoom(code, { type: 'turn_timeout_advance', state, timedOut: current.id });
+        } else if (row.phase === 'endTurn' || row.phase === 'trading') {
           // Auto end-turn for stalled player
           const nextIdx = advancePlayer(players, row.current_player_index);
           const alive = players.filter(p => !p.bankrupt);
           if (alive.length <= 1) continue; // game over already
           await run(
             `UPDATE game_states SET current_player_index = $1, phase = 'awaitingRoll',
-             dice_multiplier = 1, turn_started_at = $2,
+             dice_multiplier = 1, pending_trade = NULL, turn_started_at = $2,
              state_version = state_version + 1, updated_at = $2 WHERE room_code = $3`,
             [nextIdx, now(), code]
           );
@@ -942,12 +1230,12 @@ function startTurnTimerScheduler(broadcastToRoom) {
 }
 
 module.exports = {
-  rollDice, movePlayer, buyProperty, upgradeProperty,
+  rollDice, movePlayer, buyProperty, declinePurchase, upgradeProperty,
   endTurn, getState, sendChatMessage, resolveLanding,
   startAuction, placeAuctionBid, passAuctionBid, resolveAuction,
   proposeTrade, respondTrade,
   mortgageProperty, unmortgageProperty,
-  finishGame,
+  finishGame, finalizeGame, settleDebt, netWorth,
   startTurnTimerScheduler,
   BOARD, now, randomDice,
 };

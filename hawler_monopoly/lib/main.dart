@@ -88,9 +88,15 @@ class HawlerMonopolyApp extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       routerConfig: _router,
-      builder: (context, child) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: child!,
+      // وێبگەڕەکان AudioContext ڕادەگرن تا یەکەم کرتەی بەکارهێنەر — بۆیە
+      // لە یەکەم دەستلێدان چالاکی دەکەینەوە، ئەگەرنا دەنگەکان بێدەنگن.
+      builder: (context, child) => Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => SoundService.instance.unlockAudio(),
+        child: Directionality(
+          textDirection: TextDirection.rtl,
+          child: child!,
+        ),
       ),
     );
   }

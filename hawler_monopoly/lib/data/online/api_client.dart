@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -241,6 +240,14 @@ class ApiClient {
       'tileIndex': tileIndex,
       'price': price,
     });
+  }
+
+  /// ڕەتکردنەوەی کڕینی موڵک — دەچێتە مزایەدە.
+  ///
+  /// پێشتر کڵاینت `end-turn`ی بانگ دەکرد کە سێرڤەر ڕەتی دەکردەوە و
+  /// یارییەکە هەڵدەواسرا.
+  Future<ApiResult<Map<String, dynamic>>> declinePurchase(String roomCode) async {
+    return _post('/api/games/${roomCode.toUpperCase()}/decline', {});
   }
 
   Future<ApiResult<Map<String, dynamic>>> upgradeProperty(String roomCode, int tileIndex) async {
